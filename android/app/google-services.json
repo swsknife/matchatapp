@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "48027858151",
+    "project_id": "matchchatapp-61051",
+    "storage_bucket": "matchchatapp-61051.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:48027858151:android:acc7fb626925a9745dde42",
+        "android_client_info": {
+          "package_name": "com.matchchatapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyALCHACmro3nD1-gnh45_-3BvwIj9J1v8M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Saudi Pediatric Vaccination Tool (Demo)</title>
+  <style>
+    .vaccine-group {
+      display: inline-block;
+      margin: 5px;
+    }
+    .overdue {
+      color: red;
+    }
+    .upcoming {
+      color: blue;
+    }
+    .on-time {
+      color: green;
+    }
+    .error {
+      color: red;
+      font-weight: bold;
+    }
+    #recommendations {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Saudi Pediatric Vaccination Tool (Demo)</h2>
+
+<form>
+  <label for="birthDate">Child's Date of Birth:</label>
+  <input type="date" id="birthDate" required>
+  <button type="button" onclick="generateSchedule()">Generate Schedule</button>
+</form>
+
+<div id="errorMsg" class="error"></div>
+
+<h3>Vaccines Received:</h3>
+<div id="vaccineList"></div>
+
+<div id="recommendations"></div>
+
+<script>
+  // 1) Define a simplified set of pediatric vaccine doses with recommended ages in months
+  //    (Adjust for your specific guidelines)
+  const vaccines = [
+    { name: "BCG (Birth)", recommendedAge: 0 },
+    { name: "Hep B #1 (Birth)", recommendedAge: 0 },
+    { name: "Hep B #2", recommendedAge: 1 },
+    { name: "OPV #1", recommendedAge: 2 },
+    { name: "DTaP #1", recommendedAge: 2 },
+    { name: "Hib #1", recommendedAge: 2 },
+    { name: "PCV #1", recommendedAge: 2 },
+    { name: "Rotavirus #1", recommendedAge: 2 },
+
+    { name: "OPV #2", recommendedAge: 4 },
+    { name: "DTaP #2", recommendedAge: 4 },
+    { name: "Hib #2", recommendedAge: 4 },
+    { name: "PCV #2", recommendedAge: 4 },
+    { name: "Rotavirus #2", recommendedAge: 4 },
+
+    { name: "OPV #3", recommendedAge: 6 },
+    { name: "DTaP #3", recommendedAge: 6 },
+    { name: "Hib #3", recommendedAge: 6 },
+    { name: "PCV #3", recommendedAge: 6 },
+    { name: "Rotavirus #3", recommendedAge: 6 },
+    { name: "Hep B #3", recommendedAge: 6 },
+
+    { name: "MMR #1", recommendedAge: 9 },
+    { name: "Varicella #1", recommendedAge: 12 },
+    { name: "Hep A #1", recommendedAge: 12 },
+    { name: "DTaP Booster (4th)", recommendedAge: 18 },
+    // etc... up to age 18 if needed
+  ];
+
+  // 2) Dynamically create checkboxes for each vaccine/dose
+  document.addEventListener('DOMContentLoaded', () => {
+    const vaccineListDiv = document.getElementById('vaccineList');
+    vaccines.forEach((vax, index) => {
+      const label = document.createElement('label');
+      label.innerText = vax.name;
+      label.style.display = 'block';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.id = `vaccine_${index}`;
+      checkbox.name = `vaccine_${index}`;
+      checkbox.value = vax.name;
+
+      label.prepend(checkbox);
+      vaccineListDiv.appendChild(label);
+    });
+  });
+
+  // 3) Calculate the child's age in months
+  function getAgeInMonths(birthDate) {
+    const today = new Date();
+    let ageMonths = (today.getFullYear() - birthDate.getFullYear()) * 12;
+    ageMonths += today.getMonth() - birthDate.getMonth();
+
+    // Check if day of month is less than birth date => adjust by subtracting 1 month
+    if (today.getDate() < birthDate.getDate()) {
+      ageMonths--;
+    }
+    return ageMonths < 0 ? 0 : ageMonths;
+  }
+
+  // 4) Generate schedule
+  function generateSchedule() {
+    const errorDiv = document.getElementById('errorMsg');
+    errorDiv.innerHTML = '';
+
+    const birthDateValue = document.getElementById('birthDate').value;
+    if (!birthDateValue) {
+      errorDiv.innerHTML = "Please enter the child's birth date.";
+      return;
+    }
+
+    const birthDate = new Date(birthDateValue);
+    const today = new Date();
+    if (birthDate > today) {
+      errorDiv.innerHTML = "Birth date cannot be in the future!";
+      return;
+    }
+
+    const ageMonths = getAgeInMonths(birthDate);
+
+    // Collect which vaccines have been checked as "received"
+    const receivedVaccines = [];
+    vaccines.forEach((vax, index) => {
+      const checkbox = document.getElementById(`vaccine_${index}`);
+      if (checkbox && checkbox.checked) {
+        receivedVaccines.push(vax.name);
+      }
+    });
+
+    // Now figure out which vaccines are:
+    // - Overdue: child's age >= recommendedAge but not received
+    // - Upcoming: child's age < recommendedAge (not due yet)
+    // - On-time or completed: if child's age >= recommendedAge and it's already received
+
+    let results = [];
+    vaccines.forEach(v => {
+      const recommendedAge = v.recommendedAge; // in months
+      const vaccineName = v.name;
+      const isReceived = receivedVaccines.includes(vaccineName);
+
+      if (ageMonths >= recommendedAge) {
+        // The child is old enough to have received it
+        if (isReceived) {
+          // It's up to date
+          results.push(`<div class="on-time">${vaccineName}: (Received) - On time</div>`);
+        } else {
+          // Overdue
+          results.push(`<div class="overdue">${vaccineName}: Overdue (child is ${ageMonths} months old, recommended at ${recommendedAge} months)</div>`);
+        }
+      } else {
+        // Not old enough yet
+        if (isReceived) {
+          // If it's received even though the child is younger than recommended? Possibly out-of-sequence
+          results.push(`<div class="on-time">${vaccineName}: (Received early or out-of-sequence)</div>`);
+        } else {
+          // Upcoming
+          const monthsUntilDue = recommendedAge - ageMonths;
+          // Roughly estimate date due
+          const dueDate = new Date();
+          dueDate.setMonth(dueDate.getMonth() + monthsUntilDue);
+          const dueString = dueDate.toLocaleDateString('en-CA'); // YYYY-MM-DD format
+
+          results.push(`<div class="upcoming">${vaccineName}: Upcoming in ~${monthsUntilDue} months (around ${dueString})</div>`);
+        }
+      }
+    });
+
+    const recommendationsDiv = document.getElementById('recommendations');
+    recommendationsDiv.innerHTML = "<h3>Vaccine Schedule</h3>" + results.join('');
+  }
+</script>
+</body>
+</html>

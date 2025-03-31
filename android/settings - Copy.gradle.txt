@@ -1,0 +1,15 @@
+dependencyResolutionManagement {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        google()
+        maven {
+            url = uri("$rootDir/../node_modules/react-native/android")
+        }
+    }
+}
+
+rootProject.name = 'MatchChatApp'
+apply from: file("../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesSettingsGradle(settings)
+include ':app'
+includeBuild("$rootDir/../node_modules/react-native-gradle-plugin")
