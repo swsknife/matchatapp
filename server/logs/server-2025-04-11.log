@@ -1,0 +1,11 @@
+[2025-04-11T17:24:15.962Z] [INFO] A user connected {"socketId":"vzjTf5SwyCwtWAX4AAAB","address":"192.168.87.82","userAgent":"okhttp/4.11.0","transport":"websocket"}
+[2025-04-11T17:24:21.789Z] [INFO] Received ping from client {"ip":"192.168.87.82"}
+[2025-04-11T17:32:04.012Z] [INFO] Received ping from client {"ip":"192.168.87.82"}
+[2025-04-11T17:32:04.045Z] [INFO] A user connected {"socketId":"SF9jZgbYwdwEcyF-AAAD","address":"192.168.87.82","userAgent":"okhttp/4.11.0","transport":"websocket"}
+[2025-04-11T17:35:26.647Z] [INFO] Received ping from client {"ip":"192.168.87.82"}
+[2025-04-11T17:35:36.207Z] [INFO] Debug status request received {"ip":"192.168.87.82"}
+[2025-04-11T17:35:41.951Z] [DEBUG] Received ping from client {"socketId":"SF9jZgbYwdwEcyF-AAAD","data":{"clientTime":1744392942036}}
+[2025-04-11T17:36:36.186Z] [DEBUG] Received ping from client {"socketId":"SF9jZgbYwdwEcyF-AAAD","data":{"clientTime":1744392996247}}
+[2025-04-11T18:00:54.264Z] [INFO] Received ping from client {"ip":"192.168.87.82"}
+[2025-04-11T18:00:54.292Z] [INFO] A user connected {"socketId":"re9Zb4dLksLa3QRxAAAF","address":"192.168.87.82","userAgent":"okhttp/4.11.0","transport":"websocket"}
+[2025-04-11T18:00:58.330Z] [INFO] Received ping from client {"ip":"192.168.87.82"}

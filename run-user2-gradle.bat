@@ -1,0 +1,9 @@
+@echo off
+echo Building and installing User2 Debug variant...
+cd android
+call gradlew installUser2Debug
+cd ..
+echo Starting Metro server on port 8082...
+start cmd /k npx react-native start --port 8082
+echo Launching app...
+adb shell am start -n com.matchchatapp.user2/com.matchchatapp.MainActivity

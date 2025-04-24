@@ -21,7 +21,7 @@ react {
     //   The list of variants to that are debuggable. For those we're going to
     //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
-    // debuggableVariants = ["liteDebug", "prodDebug"]
+    debuggableVariants = ["user1Debug", "user2Debug"]
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
@@ -82,6 +82,16 @@ android {
         versionCode 1
         versionName "1.0"
     }
+    
+    // Configure source sets for flavor-specific code
+    sourceSets {
+        user1 {
+            manifest.srcFile 'src/user1/AndroidManifest.xml'
+        }
+        user2 {
+            manifest.srcFile 'src/user2/AndroidManifest.xml'
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -102,6 +112,21 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
+    flavorDimensions "user"
+    productFlavors {
+        user1 {
+            dimension "user"
+            // Use a unique application ID for user1
+            applicationIdSuffix ".user1"
+            resValue "string", "app_name", "MatchChatApp User1"
+        }
+        user2 {
+            dimension "user"
+            // Use a unique application ID for user2
+            applicationIdSuffix ".user2"
+            resValue "string", "app_name", "MatchChatApp User2"
+        }
+    }
 }
 
 dependencies {
@@ -113,6 +138,42 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+    
+    // Fresco dependency
+    implementation("com.facebook.fresco:fresco:2.6.0")
+    
+    // SoLoader dependency
+    implementation("com.facebook.soloader:soloader:0.10.5")
+    
+    // OkHttp dependency
+    debugImplementation("com.squareup.okhttp3:okhttp:4.11.0")
+    
+    // Hermes support
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    }
 }
 
 apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesAppBuildGradle(project)
+
+// Add helper tasks to run different user versions
+task runUser1Debug(type: Exec) {
+    commandLine 'cmd', '/c', 'npx', 'react-native', 'run-android', '--variant', 'user1Debug', '--port', '8081'
+}
+
+task runUser2Debug(type: Exec) {
+    commandLine 'cmd', '/c', 'npx', 'react-native', 'run-android', '--variant', 'user2Debug', '--port', '8082'
+}
+
+// Task to uninstall both apps for clean testing
+task uninstallBothApps(type: Exec) {
+    doFirst {
+        println "Uninstalling both app variants..."
+    }
+    commandLine 'cmd', '/c', 'adb', 'uninstall', 'com.matchchatapp.user1'
+    finalizedBy {
+        exec {
+            commandLine 'cmd', '/c', 'adb', 'uninstall', 'com.matchchatapp.user2'
+        }
+    }
+}

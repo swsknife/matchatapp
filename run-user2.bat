@@ -1,0 +1,3 @@
+@echo off
+echo Running User2 Debug Build...
+npx react-native run-android --variant user2Debug --port 8082

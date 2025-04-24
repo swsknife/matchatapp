@@ -1,0 +1,7 @@
+[2025-04-22T06:13:35.845Z] [INFO] Received ping from client {"ip":"192.168.178.95"}
+[2025-04-22T06:13:35.970Z] [INFO] A user connected {"socketId":"Gk9kQOFTNCr1MRu6AAAB","address":"192.168.178.95","userAgent":"okhttp/4.11.0","transport":"websocket"}
+[2025-04-22T06:18:51.801Z] [INFO] Received ping from client {"ip":"192.168.178.95"}
+[2025-04-22T06:18:51.816Z] [INFO] Received ping from client {"ip":"192.168.178.95"}
+[2025-04-22T06:18:51.892Z] [INFO] A user connected {"socketId":"IHBQ8q9YAfua0HcAAAAD","address":"192.168.178.95","userAgent":"okhttp/4.11.0","transport":"websocket"}
+[2025-04-22T06:19:25.450Z] [INFO] Received ping from client {"ip":"192.168.178.95"}
+[2025-04-22T06:19:31.676Z] [INFO] Received ping from client {"ip":"192.168.178.95"}

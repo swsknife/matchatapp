@@ -1,0 +1,9 @@
+Step 1: Build and Install the User1 Debug APK
+cd c:/Users/ASUS/MatchChatApp/android
+gradlew installUser1Debug
+cd ..
+Step 2: Start the Metro Server
+npx react-native start --port 8081
+Step 3: Launch the App with the Correct Package Name
+adb shell am start -n com.matchchatapp.user1/com.matchchatapp.MainActivity
+The key difference is using

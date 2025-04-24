@@ -1,0 +1,3 @@
+@echo off
+echo Running User1 Debug Build with --mode flag...
+npx react-native run-android --mode user1Debug --port 8081

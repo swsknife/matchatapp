@@ -1,0 +1,3 @@
+@echo off
+echo Starting MatchChatApp Server...
+npm start
