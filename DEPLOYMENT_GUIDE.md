@@ -15,6 +15,7 @@ This guide explains how to deploy the MatchChatApp server to Render.com (free ti
    - Build Command: `npm install`
    - Start Command: `npm start`
    - Select the Free plan
+   - Important: Do NOT set a custom PORT environment variable - Render.com will automatically assign a port
 6. Click "Create Web Service"
 7. Wait for the deployment to complete (this may take a few minutes)
 8. Once deployed, note the URL of your service (e.g., https://match-chat-app-server.onrender.com)
@@ -54,9 +55,30 @@ This guide explains how to deploy the MatchChatApp server to Render.com (free ti
 If you encounter connection issues:
 
 1. Check that your server is running on Render.com
-2. Verify that the URL in `.env.production` matches your Render.com URL
-3. Check the app logs for any connection errors
-4. Make sure your device has internet access
+   - Go to your Render.com dashboard and check the logs
+   - Make sure there are no errors in the server startup
+   - Verify the server is actually running and not in a crashed state
+
+2. Verify that the URL in `.env.production` matches your Render.com URL exactly
+   - It should be something like `https://match-chat-app-server.onrender.com`
+   - Do NOT include any port number in the URL
+   - Make sure there are no trailing slashes or spaces
+
+3. Check if you can access the server from a browser
+   - Try visiting `https://your-app-name.onrender.com/ping` in a browser
+   - If you get "pong" back, the server is running correctly
+   - If not, there might be an issue with your Render.com deployment
+
+4. Check for environment variable issues
+   - Make sure you haven't set a custom PORT variable in Render.com
+   - Let Render.com automatically assign and manage the port
+
+5. Check the app logs for any connection errors
+   - Look for network-related errors in your app's logs
+   - Check for any CORS or SSL-related issues
+
+6. Make sure your device has internet access and can reach Render.com
+   - Some networks might block certain domains or have firewall restrictions
 
 ## Notes
 
@@ -64,5 +86,10 @@ If you encounter connection issues:
   - The service will spin down after 15 minutes of inactivity
   - The first request after inactivity may take a few seconds to respond
   - There are monthly usage limits
+
+- Port Configuration:
+  - Render.com automatically assigns a port via the PORT environment variable
+  - Your server code should use `process.env.PORT` to listen on the correct port
+  - External access is always through the standard HTTPS port (443), so don't include a port in your URLs
 
 - For production use, consider upgrading to a paid plan or using a different hosting service

@@ -1068,9 +1068,11 @@ const logWithTimestamp = (message, data = null) => {
 };
 
 // Start the server
+logWithTimestamp(`Attempting to start server with PORT=${PORT} (from env: ${process.env.PORT || 'not set'})`);
 server.listen(PORT, '0.0.0.0', () => {
   logWithTimestamp(`Server is running on port ${PORT}`);
   logWithTimestamp(`Server environment: ${process.env.NODE_ENV || 'development'}`);
+  logWithTimestamp(`Note: External access will be through Render.com's HTTPS port (443)`);
   
   // Log active connections every 30 seconds
   const statsLoggingInterval = setInterval(() => {

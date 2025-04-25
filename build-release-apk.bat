@@ -19,6 +19,11 @@ echo.
 echo Note: This APK is configured to connect to https://match-chat-app-server.onrender.com
 echo Please deploy your server to Render.com before using this APK.
 echo.
+echo IMPORTANT: When deploying to Render.com:
+echo 1. Do NOT set a custom PORT environment variable
+echo 2. Let Render.com automatically assign and manage the port
+echo 3. Make sure your server code uses process.env.PORT
+echo.
 
 cd ..
 
