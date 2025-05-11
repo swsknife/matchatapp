@@ -4,9 +4,11 @@ const socketIo = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const logger = require('./logger');
+const logsRouter = require('./routes/logs');
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: '1mb' })); // For parsing application/json
 
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -39,6 +41,9 @@ app.get('/', (req, res) => {
   logger.info('Received request to root endpoint');
   res.status(200).send('MatchChatApp server is running!');
 });
+
+// Mount the logs router
+app.use('/api/logs', logsRouter);
 
 // Debug endpoint to get server status
 app.get('/debug/status', (req, res) => {

@@ -8,18 +8,29 @@ import HomeScreen from './src/screens/HomeScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import DebugScreen from './src/screens/DebugScreen';
 import { startPeriodicCleanup, stopPeriodicCleanup } from './src/utils/storageCleanup';
+import remoteLogger from './src/utils/remoteLogger';
 
 const Stack = createStackNavigator();
 
 const AppContent = () => {
-  // Start storage cleanup when app loads and stop when it unmounts
+  // Initialize services when app loads
   useEffect(() => {
     // Start cleanup process - run once per day, keep messages for 30 days
     startPeriodicCleanup(24 * 60 * 60 * 1000, 30);
     
+    // Initialize remote logger
+    const cleanupLogger = remoteLogger.initRemoteLogger();
+    
+    // Log app start
+    remoteLogger.log('Application started', {
+      timestamp: new Date().toISOString(),
+      version: '0.0.1' // Replace with your app version
+    });
+    
     // Clean up when component unmounts
     return () => {
       stopPeriodicCleanup();
+      if (cleanupLogger) cleanupLogger();
     };
   }, []);
   

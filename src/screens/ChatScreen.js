@@ -22,6 +22,7 @@ import { selectMessages } from '../store/selectors';
 import { getMessages, generateMessageId } from '../services/storageService';
 import { handleStorageError, handleNetworkError, ERROR_SEVERITY } from '../utils/errorHandling';
 import { useFocusEffect } from '@react-navigation/native';
+import remoteLogger from '../utils/remoteLogger';
 
 /**
  * ChatScreen Component
@@ -38,12 +39,44 @@ import { useFocusEffect } from '@react-navigation/native';
  * @param {Object} navigation - React Navigation navigation object
  */
 const ChatScreen = ({ route, navigation }) => {
-  // Extract parameters from navigation
-  const { userId, matchId } = route.params;
+  // Extract parameters from navigation with validation
+  const params = route.params || {};
+  const userId = params.userId;
+  const matchId = params.matchId;
+  
+  // Log screen initialization
+  useEffect(() => {
+    remoteLogger.log('ChatScreen initialized', {
+      params,
+      userId,
+      matchId,
+      hasParams: !!params,
+      hasUserId: !!userId,
+      hasMatchId: !!matchId
+    });
+    
+    // Validate required parameters
+    if (!userId || !matchId) {
+      const errorMsg = 'Missing required parameters for ChatScreen';
+      console.error(errorMsg, { userId, matchId, params });
+      
+      remoteLogger.logError(
+        new Error(errorMsg),
+        'ChatScreen.initialization',
+        false
+      );
+      
+      Alert.alert(
+        'Error',
+        'Missing required match information. Please try again.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    }
+  }, [userId, matchId, navigation, params]);
   
   // Redux hooks
   const dispatch = useDispatch();
-  const messages = useSelector((state) => selectMessages(state, matchId));
+  const messages = useSelector((state) => selectMessages(state, matchId || ''));
   
   // Component state
   const [message, setMessage] = useState(''); // Current message being typed
@@ -65,6 +98,15 @@ const ChatScreen = ({ route, navigation }) => {
   useFocusEffect(
     React.useCallback(() => {
       console.log('Chat screen focused');
+      remoteLogger.log('Chat screen focused', { userId, matchId });
+      
+      // Validate required parameters
+      if (!userId || !matchId) {
+        const errorMsg = 'Missing required parameters in useFocusEffect';
+        console.error(errorMsg, { userId, matchId });
+        remoteLogger.logError(new Error(errorMsg), 'ChatScreen.useFocusEffect');
+        return () => {};
+      }
       
       // Track if this is a return to an existing match
       const isReturningToMatch = hasJoinedRef.current;
@@ -73,26 +115,36 @@ const ChatScreen = ({ route, navigation }) => {
       if (!isLoading) {
         if (!hasJoinedRef.current) {
           console.log('Joining match for the first time');
-          joinMatch(matchId, userId, (response) => {
-            if (response && response.error) {
-              console.error('Error joining match:', response.error);
-              Alert.alert('Error', 'Failed to join the match. Please try again.');
-              navigation.goBack();
-            } else {
-              hasJoinedRef.current = true;
-            }
-          });
+          try {
+            joinMatch(matchId, userId, (response) => {
+              if (response && response.error) {
+                console.error('Error joining match:', response.error);
+                Alert.alert('Error', 'Failed to join the match. Please try again.');
+                navigation.goBack();
+              } else {
+                hasJoinedRef.current = true;
+              }
+            });
+          } catch (error) {
+            console.error('Exception when joining match:', error);
+            Alert.alert('Error', 'An unexpected error occurred when joining the match. Please try again.');
+            navigation.goBack();
+          }
         } else {
           console.log('Returning to existing match');
           // Notify server we're back in the match
-          navigatingBack(matchId);
+          try {
+            navigatingBack(matchId);
+          } catch (error) {
+            console.error('Error navigating back to match:', error);
+          }
         }
       }
       
       return () => {
         console.log('Chat screen blurred');
-        // Only emit navigating away if the match is still active
-        if (isMatchActive) {
+        // Only emit navigating away if the match is still active and parameters are valid
+        if (isMatchActive && matchId) {
           try {
             navigatingAway(matchId);
           } catch (error) {
@@ -174,6 +226,13 @@ const ChatScreen = ({ route, navigation }) => {
   useEffect(() => {
     let cleanupFunctions = [];
     
+    // Validate required parameters before setting up socket
+    if (!userId || !matchId) {
+      console.error('Missing required parameters in socket setup:', { userId, matchId });
+      setIsLoading(false); // Set loading to false to avoid infinite loading state
+      return () => {};
+    }
+    
     const setupSocket = async () => {
       try {
         // Initialize socket with a timeout of 20 seconds
@@ -209,8 +268,15 @@ const ChatScreen = ({ route, navigation }) => {
 
         // Join the match if not already joined
         if (!hasJoinedRef.current) {
-          await joinMatch(matchId, userId);
-          hasJoinedRef.current = true;
+          try {
+            await joinMatch(matchId, userId);
+            hasJoinedRef.current = true;
+          } catch (error) {
+            console.error('Error joining match in socket setup:', error);
+            Alert.alert('Connection Error', 'Failed to join the match. Please try again.');
+            navigation.goBack();
+            return;
+          }
         }
         
         setIsLoading(false);

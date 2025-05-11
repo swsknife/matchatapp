@@ -20,6 +20,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import {
   setCity, setTime, setGame, setLoading, setIsSearching, setCurrentMatch,
 } from '../store/actions';
+import remoteLogger from '../utils/remoteLogger';
 
   /**
    * Redux selector functions for accessing state
@@ -625,12 +626,35 @@ const HomeScreen = ({ navigation }) => {
         <TouchableOpacity
           style={styles.matchButton}
           onPress={() => {
+            // Log the start of the Go to Match action
+            remoteLogger.log('Go to Match button clicked', { 
+              userId,
+              matchId: currentMatch?.matchId,
+              matchData: currentMatch
+            });
+            
             // Validate match data before navigating
-            if (!currentMatch.matchId) {
-              console.error('Invalid match data:', currentMatch);
+            if (!currentMatch || !currentMatch.matchId) {
+              const errorMsg = 'Invalid match data';
+              console.error(errorMsg, currentMatch);
+              remoteLogger.logError(
+                new Error(errorMsg), 
+                'HomeScreen.goToMatch'
+              );
               Alert.alert(
                 'Invalid Match', 
                 'The match data is invalid. Please try leaving the match and searching again.',
+                [{ text: 'OK' }]
+              );
+              return;
+            }
+            
+            // Validate userId
+            if (!userId) {
+              console.error('Invalid userId:', userId);
+              Alert.alert(
+                'Error', 
+                'User ID is missing. Please restart the app and try again.',
                 [{ text: 'OK' }]
               );
               return;
@@ -640,14 +664,39 @@ const HomeScreen = ({ navigation }) => {
               // Set loading state to prevent multiple clicks
               dispatch(setLoading(true));
               
+              // Log the socket check attempt
+              remoteLogger.log('Checking if match is active', {
+                matchId: currentMatch.matchId,
+                userId
+              });
+              
               // Check if the match is still active on the server
               const socket = getSocketInstance();
+              
+              // Log socket state
+              remoteLogger.log('Socket state before navigation', {
+                socketExists: !!socket,
+                connected: socket ? socket.connected : false,
+                id: socket ? socket.id : null
+              });
+              
               if (socket && socket.connected) {
                 socket.emit('checkMatchActive', { matchId: currentMatch.matchId }, (response) => {
                   dispatch(setLoading(false));
                   
+                  // Log the server response
+                  remoteLogger.log('Server response for checkMatchActive', {
+                    matchId: currentMatch.matchId,
+                    response
+                  });
+                  
                   if (response && response.active === false) {
                     // Match is no longer active on the server
+                    remoteLogger.log('Match is no longer active', {
+                      matchId: currentMatch.matchId,
+                      response
+                    });
+                    
                     Alert.alert(
                       'Match Ended', 
                       'This match has ended or is no longer available.',
@@ -662,12 +711,41 @@ const HomeScreen = ({ navigation }) => {
                   // Match is active, proceed with navigation
                   try {
                     // Tell server we're returning to the match
+                    remoteLogger.log('Navigating back to match', {
+                      matchId: currentMatch.matchId
+                    });
+                    
                     navigatingBack(currentMatch.matchId);
                     
-                    // Navigate to chat screen
-                    navigation.navigate('Chat', { ...currentMatch, userId });
+                    // Prepare navigation params with explicit required fields
+                    const navigationParams = {
+                      matchId: currentMatch.matchId,
+                      userId: userId,
+                      // Include other match data
+                      players: currentMatch.players || [],
+                      createdAt: currentMatch.createdAt || Date.now(),
+                      // Any other fields from currentMatch
+                      ...currentMatch
+                    };
+                    
+                    // Log navigation params for debugging
+                    console.log('Navigating to Chat with params:', JSON.stringify(navigationParams));
+                    
+                    // Log to remote logger
+                    remoteLogger.log('Navigating to Chat screen', {
+                      navigationParams,
+                      matchId: currentMatch.matchId,
+                      userId
+                    });
+                    
+                    // Navigate to chat screen with validated params
+                    navigation.navigate('Chat', navigationParams);
                   } catch (navError) {
                     console.error('Error navigating to match:', navError);
+                    
+                    // Log the navigation error
+                    remoteLogger.logError(navError, 'HomeScreen.navigateToChat');
+                    
                     Alert.alert(
                       'Navigation Error', 
                       'Failed to open chat screen. Please try again.',
@@ -678,11 +756,44 @@ const HomeScreen = ({ navigation }) => {
               } else {
                 // If socket is not connected, just try to navigate
                 dispatch(setLoading(false));
-                navigation.navigate('Chat', { ...currentMatch, userId });
+                
+                // Log the socket disconnection issue
+                remoteLogger.log('Socket not connected when navigating to match', {
+                  matchId: currentMatch.matchId,
+                  userId,
+                  socketExists: !!socket
+                }, remoteLogger.LOG_LEVELS.WARN);
+                
+                // Prepare navigation params with explicit required fields
+                const navigationParams = {
+                  matchId: currentMatch.matchId,
+                  userId: userId,
+                  // Include other match data
+                  players: currentMatch.players || [],
+                  createdAt: currentMatch.createdAt || Date.now(),
+                  // Any other fields from currentMatch
+                  ...currentMatch
+                };
+                
+                // Log navigation params for debugging
+                console.log('Navigating to Chat with params (no socket):', JSON.stringify(navigationParams));
+                
+                // Log to remote logger
+                remoteLogger.log('Navigating to Chat screen (no socket)', {
+                  navigationParams,
+                  matchId: currentMatch.matchId,
+                  userId
+                });
+                
+                navigation.navigate('Chat', navigationParams);
               }
             } catch (error) {
               dispatch(setLoading(false));
               console.error('Error checking match status:', error);
+              
+              // Log the error to remote logger
+              remoteLogger.logError(error, 'HomeScreen.checkMatchStatus');
+              
               Alert.alert(
                 'Connection Error', 
                 'Failed to verify match status. Please check your connection and try again.',
