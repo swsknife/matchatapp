@@ -62,19 +62,19 @@ const initializeSocketSingleton = () => {
       
     socketInstance = io(REACT_APP_SERVER_URL, {
       reconnection: true,           // Enable automatic reconnection
-      reconnectionAttempts: 10,     // Increased: Try to reconnect 10 times
-      reconnectionDelay: 2000,      // Increased: Wait 2 seconds between reconnection attempts
-      reconnectionDelayMax: 10000,  // Added: Maximum reconnection delay of 10 seconds
-      randomizationFactor: 0.5,     // Added: Randomization factor to prevent all clients reconnecting simultaneously
-      timeout: 30000,               // Increased: Connection timeout to 30 seconds
-      pingInterval: 25000,          // Decreased: Send a ping more frequently (every 25 seconds)
-      pingTimeout: 20000,           // Decreased: Consider connection dead if no pong within 20 seconds
+      reconnectionAttempts: 5,      // Maximum number of reconnection attempts
+      reconnectionDelay: 1000,      // Start with 1 second delay
+      reconnectionDelayMax: 30000,  // Maximum delay of 30 seconds (for exponential backoff)
+      randomizationFactor: 0.5,     // Randomization factor to prevent all clients reconnecting simultaneously
+      timeout: 30000,               // Connection timeout to 30 seconds
+      pingInterval: 25000,          // Send a ping every 25 seconds
+      pingTimeout: 20000,           // Consider connection dead if no pong within 20 seconds
       transports: ['websocket', 'polling'], // Try websocket first, then fall back to polling
       forceNew: false,              // Reuse existing connection if available
       upgrade: true,                // Allow transport upgrade
       rememberUpgrade: true,        // Remember the transport upgrade
-      autoConnect: true,            // Added: Connect automatically
-      rejectUnauthorized: false     // Added: Ignore SSL certificate issues (for development only)
+      autoConnect: true,            // Connect automatically
+      rejectUnauthorized: false     // Ignore SSL certificate issues (for development only)
     });
 
     // Set up connection status event handlers
@@ -83,20 +83,39 @@ const initializeSocketSingleton = () => {
       store.dispatch(setConnectionStatus('connected'));
     });
 
+    // Track reconnection attempts for manual reconnection
+    let manualReconnectAttempts = 0;
+    const MAX_MANUAL_RECONNECT_ATTEMPTS = 3;
+    
     socketInstance.on('connect_error', (error) => {
       console.error("Connection error:", error);
       console.error("Error details:", JSON.stringify(error));
       store.dispatch(setConnectionStatus('disconnected'));
       
-      // Try to reconnect after a delay if we've exceeded reconnection attempts
-      // Fix: Check if current attempts exceed or equal the max attempts
+      // Try to reconnect after a delay if we've exceeded automatic reconnection attempts
       if (socketInstance.io && 
           socketInstance.io._reconnectionAttempts >= socketInstance.io._opts.reconnectionAttempts) {
-        console.log("Maximum reconnection attempts reached. Will try again in 10 seconds.");
-        setTimeout(() => {
-          console.log("Attempting to reconnect after timeout...");
-          socketInstance.connect();
-        }, 10000);
+        
+        // Only try manual reconnection up to MAX_MANUAL_RECONNECT_ATTEMPTS times
+        if (manualReconnectAttempts < MAX_MANUAL_RECONNECT_ATTEMPTS) {
+          // Calculate delay with exponential backoff
+          const delay = Math.min(
+            30000, // Max 30 seconds
+            1000 * Math.pow(2, manualReconnectAttempts) // Exponential backoff
+          );
+          
+          console.log(`Maximum automatic reconnection attempts reached. Will try manual reconnection in ${delay/1000} seconds. (Attempt ${manualReconnectAttempts + 1}/${MAX_MANUAL_RECONNECT_ATTEMPTS})`);
+          
+          setTimeout(() => {
+            console.log(`Attempting manual reconnection (${manualReconnectAttempts + 1}/${MAX_MANUAL_RECONNECT_ATTEMPTS})...`);
+            socketInstance.connect();
+            manualReconnectAttempts++;
+          }, delay);
+        } else {
+          console.error(`Failed to reconnect after ${MAX_MANUAL_RECONNECT_ATTEMPTS} manual attempts. User intervention required.`);
+          // Dispatch a special action to show a reconnect button in the UI
+          store.dispatch(setConnectionStatus('reconnect_failed'));
+        }
       }
     });
 
@@ -114,20 +133,48 @@ const initializeSocketSingleton = () => {
     socketInstance.on('reconnect_attempt', (attemptNumber) => {
       console.log(`Reconnection attempt ${attemptNumber}...`);
       store.dispatch(setConnectionStatus('reconnecting'));
+      
+      // Reset manual reconnect attempts when automatic reconnection starts
+      manualReconnectAttempts = 0;
     });
     
     socketInstance.on('reconnect', (attemptNumber) => {
       console.log(`Reconnected after ${attemptNumber} attempts`);
       store.dispatch(setConnectionStatus('connected'));
+      
+      // Reset manual reconnect attempts on successful reconnection
+      manualReconnectAttempts = 0;
+      
+      // Emit a custom event to notify components that we've reconnected
+      // This allows components to refresh their data
+      socketInstance.emit('client_reconnected');
     });
     
     socketInstance.on('reconnect_error', (error) => {
       console.error("Reconnection error:", error);
+      // Log detailed error information
+      console.error("Error details:", JSON.stringify(error));
     });
     
     socketInstance.on('reconnect_failed', () => {
-      console.error("Failed to reconnect after all attempts");
-      store.dispatch(setConnectionStatus('failed'));
+      console.error("Failed to reconnect after all automatic attempts");
+      store.dispatch(setConnectionStatus('reconnect_failed'));
+      
+      // Start manual reconnection process
+      if (manualReconnectAttempts < MAX_MANUAL_RECONNECT_ATTEMPTS) {
+        const delay = Math.min(
+          30000, // Max 30 seconds
+          1000 * Math.pow(2, manualReconnectAttempts) // Exponential backoff
+        );
+        
+        console.log(`Starting manual reconnection in ${delay/1000} seconds. (Attempt ${manualReconnectAttempts + 1}/${MAX_MANUAL_RECONNECT_ATTEMPTS})`);
+        
+        setTimeout(() => {
+          console.log(`Attempting manual reconnection (${manualReconnectAttempts + 1}/${MAX_MANUAL_RECONNECT_ATTEMPTS})...`);
+          socketInstance.connect();
+          manualReconnectAttempts++;
+        }, delay);
+      }
     });
   }
   return socketInstance;
@@ -215,12 +262,54 @@ export const initializeSocket = (timeoutMs = 15000) => {
 export const getSocketInstance = () => initializeSocketSingleton();
 
 /**
+ * Manually reconnect the socket
+ * This can be called from the UI when automatic reconnection fails
+ * @returns {boolean} True if reconnection was attempted, false if no socket exists
+ */
+export const manualReconnect = () => {
+  if (socketInstance) {
+    console.log("Manually reconnecting socket...");
+    socketInstance.connect();
+    return true;
+  }
+  return false;
+};
+
+/**
  * Disconnects the socket and cleans up the instance.
+ * Properly removes all event listeners to prevent memory leaks.
  */
 export const disconnectSocket = () => {
   if (socketInstance) {
     console.log("Disconnecting socket...");
+    
+    // Remove all listeners before disconnecting
+    // This prevents memory leaks from lingering event handlers
+    if (socketInstance.hasListeners('connect')) socketInstance.off('connect');
+    if (socketInstance.hasListeners('connect_error')) socketInstance.off('connect_error');
+    if (socketInstance.hasListeners('disconnect')) socketInstance.off('disconnect');
+    if (socketInstance.hasListeners('reconnect')) socketInstance.off('reconnect');
+    if (socketInstance.hasListeners('reconnect_attempt')) socketInstance.off('reconnect_attempt');
+    if (socketInstance.hasListeners('reconnect_error')) socketInstance.off('reconnect_error');
+    if (socketInstance.hasListeners('reconnect_failed')) socketInstance.off('reconnect_failed');
+    
+    // Remove all custom event listeners
+    if (socketInstance.hasListeners('matchFound')) socketInstance.off('matchFound');
+    if (socketInstance.hasListeners('matchEnded')) socketInstance.off('matchEnded');
+    if (socketInstance.hasListeners('activeMatches')) socketInstance.off('activeMatches');
+    if (socketInstance.hasListeners('matchLeft')) socketInstance.off('matchLeft');
+    if (socketInstance.hasListeners('playerLeft')) socketInstance.off('playerLeft');
+    if (socketInstance.hasListeners('opponentLeftMatch')) socketInstance.off('opponentLeftMatch');
+    if (socketInstance.hasListeners('message')) socketInstance.off('message');
+    if (socketInstance.hasListeners('messageDelivered')) socketInstance.off('messageDelivered');
+    if (socketInstance.hasListeners('messageRead')) socketInstance.off('messageRead');
+    if (socketInstance.hasListeners('searchTimeout')) socketInstance.off('searchTimeout');
+    if (socketInstance.hasListeners('client_reconnected')) socketInstance.off('client_reconnected');
+    
+    // Disconnect the socket
     socketInstance.disconnect();
+    
+    // Clear the instance
     socketInstance = null;
   }
 };
@@ -618,9 +707,10 @@ export const startSearch = (data, callback) => {
 export const onMessageDelivered = (callback) => {
   const socket = getSocketInstance();
   if (socket) {
-    const handler = (messageId) => {
-      console.log("Message delivered:", messageId);
-      callback(messageId);
+    const handler = (data) => {
+      // Handle both formats: object with messageId or just messageId string
+      console.log("Message delivered:", data);
+      callback(data);
     };
     socket.on('messageDelivered', handler);
     return () => socket.off('messageDelivered', handler);

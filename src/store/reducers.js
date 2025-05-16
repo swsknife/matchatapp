@@ -163,6 +163,12 @@ export const messagesReducer = (state = {}, action) =>
 /**
  * Reducer for tracking the socket connection status
  * 
+ * Valid connection status values:
+ * - 'connected': Socket is connected to the server
+ * - 'disconnected': Socket is disconnected from the server
+ * - 'reconnecting': Socket is attempting to reconnect
+ * - 'reconnect_failed': Socket failed to reconnect after all attempts
+ * 
  * @param {string} state - Current connection status, defaults to 'disconnected'
  * @param {Object} action - Redux action object
  * @returns {string} New connection status
@@ -170,7 +176,14 @@ export const messagesReducer = (state = {}, action) =>
 export const connectionStatusReducer = (state = 'disconnected', action) => {
   switch (action.type) {
     case SET_CONNECTION_STATUS:
-      return action.payload;
+      // Validate the connection status to prevent invalid states
+      const validStatuses = ['connected', 'disconnected', 'reconnecting', 'reconnect_failed'];
+      if (validStatuses.includes(action.payload)) {
+        return action.payload;
+      } else {
+        console.error(`Invalid connection status: ${action.payload}`);
+        return state;
+      }
     default:
       return state;
   }

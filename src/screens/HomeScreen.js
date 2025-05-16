@@ -8,19 +8,26 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Button,
+  Image, Platform
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { REACT_APP_SERVER_URL } from '@env';
 import { Picker } from '@react-native-picker/picker';
 import {
   initializeSocket, onMatchFound, onConnectionError, startSearch, leaveMatch,
-  getSocketInstance, navigatingBack, resetNavigationState, onDisconnect, onSearchTimeout
+  getSocketInstance, navigatingBack, resetNavigationState, onDisconnect, onSearchTimeout,
+  manualReconnect
 } from '../utils/network';
-import { v4 as uuidv4 } from 'uuid';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   setCity, setTime, setGame, setLoading, setIsSearching, setCurrentMatch,
 } from '../store/actions';
 import remoteLogger from '../utils/remoteLogger';
+import { 
+  getUserId,
+  updateActivity,
+  getSessionTimeouts
+} from '../utils/sessionManager';
 
   /**
    * Redux selector functions for accessing state
@@ -58,20 +65,51 @@ const HomeScreen = ({ navigation }) => {
   const connectionStatus = useSelector(selectConnectionStatus);
   
   // Local state
-  const [userId] = useState(uuidv4()); // Generate unique user ID on component mount
+  const [userId, setUserId] = useState(null); // Will be loaded from session manager
   const [countdown, setCountdown] = useState(0); // Counter for search duration
+  const [lastCountdownUpdate, setLastCountdownUpdate] = useState(Date.now()); // Track when countdown was last updated
   const [serverStatus, setServerStatus] = useState('unknown'); // Server connection status
+
+  /**
+   * Load user ID
+   */
+  useEffect(() => {
+    const loadUserId = async () => {
+      try {
+        // Load or generate user ID
+        const id = await getUserId();
+        setUserId(id);
+        
+        // Update activity timestamp
+        await updateActivity();
+        
+        // Log initialization
+        remoteLogger.log('HomeScreen initialized with user ID', { userId: id });
+      } catch (error) {
+        console.error('Failed to load user ID:', error);
+        remoteLogger.logError(error, 'HomeScreen.loadUserId');
+      }
+    };
+    
+    loadUserId();
+  }, []);
 
   /**
    * Socket initialization and event listener setup
    * Handles socket connection, active matches, and various socket events
    */
   useEffect(() => {
+    // Don't initialize socket until we have a user ID
+    if (!userId) return;
+    
     let isMounted = true;
 
     const setupSocketAndListeners = async () => {
       try {
         console.log("🔍 Initializing socket on HomeScreen");
+        
+        // Reset inactivity timer when setting up socket
+        resetInactivityTimer();
         
         // Try to initialize socket with a timeout of 20 seconds
         await initializeSocket(20000).catch(error => {
@@ -311,6 +349,17 @@ const HomeScreen = ({ navigation }) => {
       }
     };
   }, [dispatch, navigation, userId, currentMatch, isSearching]);
+  
+  /**
+   * Reset inactivity timer on user interaction
+   * This ensures the user isn't logged out while actively using the app
+   */
+  useEffect(() => {
+    // Reset inactivity timer when user interacts with the app
+    if (isSearching || currentMatch) {
+      updateActivity();
+    }
+  }, [isSearching, currentMatch]);
 
   /**
    * Timer effect to track search duration
@@ -330,6 +379,7 @@ const HomeScreen = ({ navigation }) => {
       timer = setInterval(() => {
         if (isMounted) {
           setCountdown((prevCountdown) => prevCountdown + 1);
+          setLastCountdownUpdate(Date.now());
         }
       }, 1000);
     } else {
@@ -354,10 +404,48 @@ const HomeScreen = ({ navigation }) => {
     // for handling app going to background/foreground
     // if we were using AppState from react-native
     
-    return () => {
-      // Clean up any app state listeners here
+    // Check for stuck search state
+    const checkStuckSearchState = () => {
+      const now = Date.now();
+      const timeSinceLastUpdate = now - lastCountdownUpdate;
+      
+      // If we're searching but the countdown hasn't updated in 5 seconds, the search is stuck
+      if (isSearching && timeSinceLastUpdate > 5000) {
+        console.log('Detected stuck search state - resetting');
+        remoteLogger.log('Detected stuck search state', { 
+          countdown, 
+          timeSinceLastUpdate,
+          isSearching,
+          loading
+        });
+        
+        // Reset the search state
+        dispatch(setIsSearching(false));
+        dispatch(setLoading(false));
+        setCountdown(0);
+        
+        // Notify the user
+        Alert.alert(
+          'Search Reset',
+          'The search appeared to be stuck and has been reset. You can try searching again.'
+        );
+      }
     };
-  }, []);
+    
+    // Check for stuck search state every 5 seconds
+    const stuckStateInterval = setInterval(checkStuckSearchState, 5000);
+    
+    // Also check immediately if we detect a potential issue
+    if (isSearching && !loading) {
+      console.log('Checking for potentially stuck search state');
+      checkStuckSearchState();
+    }
+    
+    return () => {
+      // Clean up interval
+      clearInterval(stuckStateInterval);
+    };
+  }, [isSearching, loading, countdown, lastCountdownUpdate]);
 
   /**
    * Start searching for a match
@@ -369,6 +457,9 @@ const HomeScreen = ({ navigation }) => {
       Alert.alert('Missing Information', 'Please choose a city, time, and game type before searching.');
       return;
     }
+    
+    // Update activity when starting a search
+    updateActivity();
 
     // Check connection status
     if (connectionStatus === 'disconnected') {
@@ -421,10 +512,13 @@ const HomeScreen = ({ navigation }) => {
      * Actually perform the search operation
      * Separated to allow for reconnection attempts
      */
-    const performSearch = () => {
+    const performSearch = async () => {
       dispatch(setLoading(true));
       dispatch(setIsSearching(true));
       // Countdown will be reset in the useEffect
+      
+      // Update activity timestamp
+      await updateActivity();
 
       startSearch({ city, time, game, userId }, (response) => {
         if (response && response.error) {
@@ -504,8 +598,22 @@ const HomeScreen = ({ navigation }) => {
    * Cancel an ongoing search
    * Notifies the server and updates local state
    */
-  const cancelSearch = () => {
+  const cancelSearch = async () => {
     if (isSearching) {
+      // Log the cancellation attempt
+      remoteLogger.log('Canceling search', { 
+        isSearching, 
+        countdown: countdown,
+        connectionStatus
+      });
+      
+      // Always update local state immediately to ensure UI is responsive
+      dispatch(setIsSearching(false));
+      setCountdown(0);
+      
+      // Update activity timestamp
+      await updateActivity();
+      
       // Show loading indicator while canceling
       dispatch(setLoading(true));
       
@@ -520,6 +628,7 @@ const HomeScreen = ({ navigation }) => {
           
           if (response && response.error) {
             console.error('Error canceling search:', response.error);
+            remoteLogger.logError(new Error(response.error), 'HomeScreen.cancelSearch');
             // Still show success message to user since we've canceled locally
             Alert.alert('Search Canceled', 'You have canceled the search, but there was an issue communicating with the server.');
           } else {
@@ -530,10 +639,9 @@ const HomeScreen = ({ navigation }) => {
         
         // Set a timeout in case the server doesn't respond
         setTimeout(() => {
-          if (isSearching) {
+          if (loading) {
+            remoteLogger.log('Search cancel timeout reached', { countdown });
             dispatch(setLoading(false));
-            dispatch(setIsSearching(false));
-            setCountdown(0);
             Alert.alert('Search Canceled', 'You have canceled the search, but the server did not confirm the cancellation.');
           }
         }, 5000);
@@ -560,14 +668,23 @@ const HomeScreen = ({ navigation }) => {
             styles.connectionIndicator,
             { backgroundColor:
               connectionStatus === 'connected' ? 'green' :
-              connectionStatus === 'reconnecting' ? 'orange' : 'red'
+              connectionStatus === 'reconnecting' ? 'orange' :
+              connectionStatus === 'reconnect_failed' ? 'red' : 'red'
             }
           ]} />
           <Text style={styles.connectionStatusText}>
             {connectionStatus === 'connected' ? 'Connected' :
-             connectionStatus === 'reconnecting' ? 'Reconnecting...' : 'Disconnected'}
+             connectionStatus === 'reconnecting' ? 'Reconnecting...' :
+             connectionStatus === 'reconnect_failed' ? 'Connection Failed' : 'Disconnected'}
           </Text>
         </View>
+      </View>
+      
+      {/* Session rules banner */}
+      <View style={styles.sessionRulesBanner}>
+        <Text style={styles.sessionRulesBannerText}>
+          Sessions expire after {getSessionTimeouts().inactivityTimeout} of inactivity
+        </Text>
       </View>
       
       {/* Server connection test button */}
@@ -851,9 +968,12 @@ const HomeScreen = ({ navigation }) => {
         enabled={!isSearching}
       >
         <Picker.Item label="Choose City" value="choose" />
-        <Picker.Item label="New York" value="newyork" />
-        <Picker.Item label="Los Angeles" value="losangeles" />
-        <Picker.Item label="Chicago" value="chicago" />
+        <Picker.Item label="Riyadh" value="riyadh" />
+        <Picker.Item label="Jeddah" value="jeddah" />
+        <Picker.Item label="Khobar" value="khobar" />
+        <Picker.Item label="Dahran" value="dahran" />
+        <Picker.Item label="Dammam" value="dammam" />
+        <Picker.Item label="Madinah" value="madinah" />
       </Picker>
 
       <Text style={styles.label}>Time</Text>
@@ -896,6 +1016,30 @@ const HomeScreen = ({ navigation }) => {
         </View>
       )}
       
+      {/* Connection status indicator and reconnect button */}
+      {connectionStatus === 'reconnect_failed' && (
+        <TouchableOpacity
+          style={styles.reconnectButton}
+          onPress={() => {
+            // Attempt manual reconnection
+            if (manualReconnect()) {
+              Alert.alert('Reconnecting', 'Attempting to reconnect to the server...');
+            } else {
+              Alert.alert('Error', 'Could not reconnect. Please restart the app.');
+            }
+          }}
+        >
+          <Text style={styles.reconnectButtonText}>Reconnect</Text>
+        </TouchableOpacity>
+      )}
+      
+      {/* Session rules indicator */}
+      <View style={styles.sessionRulesIndicator}>
+        <Text style={styles.sessionRulesText}>
+          Session timeout: {getSessionTimeouts().inactivityTimeout}
+        </Text>
+      </View>
+
       {/* Debug button - only visible in development */}
       {__DEV__ && (
         <TouchableOpacity
@@ -905,6 +1049,8 @@ const HomeScreen = ({ navigation }) => {
           <Text style={styles.debugButtonText}>Debug Console</Text>
         </TouchableOpacity>
       )}
+      
+
     </View>
   );
 };
@@ -1001,6 +1147,55 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: 'bold',
     fontSize: 12,
+  },
+  sessionRulesIndicator: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    backgroundColor: '#f8f9fa',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+  },
+  sessionRulesText: {
+    color: '#495057',
+    fontSize: 12,
+  },
+  sessionRulesBanner: {
+    backgroundColor: '#f8f9fa',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    marginBottom: 15,
+    alignItems: 'center',
+  },
+  sessionRulesBannerText: {
+    color: '#495057',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  reconnectButton: {
+    position: 'absolute',
+    top: 80,
+    right: 20,
+    backgroundColor: '#e74c3c',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+  },
+  reconnectButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });
 

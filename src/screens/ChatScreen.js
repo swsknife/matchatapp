@@ -17,7 +17,7 @@ import {
 } from '../utils/network';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { useDispatch, useSelector } from 'react-redux';
-import { addMessage, updateMessageStatus, setMessages } from '../store/actions';
+import { addMessage, updateMessageStatus, setMessages, setCurrentMatch, setIsSearching } from '../store/actions';
 import { selectMessages } from '../store/selectors';
 import { getMessages, generateMessageId } from '../services/storageService';
 import { handleStorageError, handleNetworkError, ERROR_SEVERITY } from '../utils/errorHandling';
@@ -283,11 +283,48 @@ const ChatScreen = ({ route, navigation }) => {
 
         // Message handlers
         const handleReceiveMessage = (newMessage) => {
-          console.log("Received message:", newMessage);
-          dispatch(addMessage(matchId, newMessage));
+          // Validate message object
+          if (!newMessage) {
+            console.error("Received null or undefined message");
+            remoteLogger.logError(new Error("Received null or undefined message"), 'ChatScreen.handleReceiveMessage');
+            return;
+          }
           
-          // If the message is from the other user and the chat screen is in focus, mark it as read
+          // Ensure message has required properties
+          if (!newMessage.id || !newMessage.sender) {
+            console.error("Received invalid message format:", newMessage);
+            remoteLogger.logError(
+              new Error(`Received invalid message format: ${JSON.stringify(newMessage)}`), 
+              'ChatScreen.handleReceiveMessage'
+            );
+            return;
+          }
+          
+          console.log("Received message:", newMessage);
+          remoteLogger.log('Received message in chat', { 
+            messageId: newMessage.id,
+            sender: newMessage.sender,
+            currentUser: userId,
+            isSelf: newMessage.sender === userId
+          });
+          
+          // Only add the message to the chat if it's from the other user
+          // Messages from the current user are already added when sent
           if (newMessage.sender !== userId) {
+            // Ensure matchId is valid before dispatching
+            if (!matchId) {
+              console.error("Cannot add message: matchId is null or undefined");
+              remoteLogger.logError(
+                new Error("Cannot add message: matchId is null or undefined"), 
+                'ChatScreen.handleReceiveMessage'
+              );
+              return;
+            }
+            
+            dispatch(addMessage(matchId, newMessage));
+            remoteLogger.log('Added message from other user to chat', { messageId: newMessage.id });
+            
+            // If the message is from the other user and the chat screen is in focus, mark it as read
             // Check if app is in foreground and this screen is focused before marking as read
             const appState = AppState.currentState;
             const isFocused = navigation.isFocused();
@@ -297,15 +334,39 @@ const ChatScreen = ({ route, navigation }) => {
             if (appState === 'active' && isFocused) {
               console.log("Marking message as read:", newMessage.id);
               
-              // Try to mark as read, with retry mechanism
-              const markAsRead = () => {
-                const socket = getSocketInstance();
-                if (socket && socket.connected) {
-                  markMessageAsRead(newMessage.id, matchId);
-                } else {
-                  console.warn("Socket not connected, will retry marking message as read");
-                  // Retry after a short delay
-                  setTimeout(markAsRead, 2000);
+              // Try to mark as read, with retry mechanism and error handling
+              const markAsRead = (retryCount = 0) => {
+                try {
+                  const socket = getSocketInstance();
+                  if (socket && socket.connected) {
+                    markMessageAsRead(newMessage.id, matchId, (error) => {
+                      if (error) {
+                        console.error("Error marking message as read:", error);
+                        remoteLogger.logError(new Error(`Failed to mark message as read: ${error}`), 'ChatScreen.markAsRead');
+                        
+                        // Retry up to 3 times with exponential backoff
+                        if (retryCount < 3) {
+                          const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+                          console.log(`Retrying mark as read in ${delay}ms (attempt ${retryCount + 1}/3)`);
+                          setTimeout(() => markAsRead(retryCount + 1), delay);
+                        }
+                      }
+                    });
+                  } else {
+                    console.warn("Socket not connected, will retry marking message as read");
+                    // Retry after a short delay, up to 3 times
+                    if (retryCount < 3) {
+                      const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+                      console.log(`Retrying mark as read in ${delay}ms (attempt ${retryCount + 1}/3)`);
+                      setTimeout(() => markAsRead(retryCount + 1), delay);
+                    } else {
+                      console.error("Failed to mark message as read after 3 attempts");
+                      remoteLogger.logError(new Error("Failed to mark message as read after 3 attempts"), 'ChatScreen.markAsRead');
+                    }
+                  }
+                } catch (error) {
+                  console.error("Exception in markAsRead:", error);
+                  remoteLogger.logError(error, 'ChatScreen.markAsRead');
                 }
               };
               
@@ -316,16 +377,78 @@ const ChatScreen = ({ route, navigation }) => {
           }
         };
 
-        const handleMessageDelivered = (messageId) => {
+        const handleMessageDelivered = (messageData) => {
+          // Validate message data
+          if (!messageData) {
+            console.error("Received null or undefined message delivery data");
+            remoteLogger.logError(
+              new Error("Received null or undefined message delivery data"), 
+              'ChatScreen.handleMessageDelivered'
+            );
+            return;
+          }
+          
+          // Handle both old format (just messageId) and new format (object with messageId)
+          const messageId = typeof messageData === 'object' ? messageData.messageId : messageData;
+          
+          // Validate messageId
+          if (!messageId) {
+            console.error("Invalid message delivery data received:", messageData);
+            remoteLogger.logError(
+              new Error(`Invalid message delivery data: ${JSON.stringify(messageData)}`), 
+              'ChatScreen.handleMessageDelivered'
+            );
+            return;
+          }
+          
+          // Validate matchId
+          if (!matchId) {
+            console.error("Cannot update message status: matchId is null or undefined");
+            remoteLogger.logError(
+              new Error("Cannot update message status: matchId is null or undefined"), 
+              'ChatScreen.handleMessageDelivered'
+            );
+            return;
+          }
+          
+          remoteLogger.log('Message delivery confirmation received', { 
+            messageId,
+            matchId
+          });
+          
           dispatch(updateMessageStatus(matchId, messageId, 'delivered'));
         };
 
         const handleMessageRead = (data) => {
+          // Validate data
+          if (!data) {
+            console.error("Received null or undefined message read data");
+            remoteLogger.logError(
+              new Error("Received null or undefined message read data"), 
+              'ChatScreen.handleMessageRead'
+            );
+            return;
+          }
+          
           // Check if we have the new format (object with messageId) or old format (just messageId)
           const messageId = typeof data === 'object' ? data.messageId : data;
           
           if (!messageId) {
             console.error('Invalid messageRead data received:', data);
+            remoteLogger.logError(
+              new Error(`Invalid messageRead data: ${JSON.stringify(data)}`), 
+              'ChatScreen.handleMessageRead'
+            );
+            return;
+          }
+          
+          // Validate matchId
+          if (!matchId) {
+            console.error("Cannot update message status: matchId is null or undefined");
+            remoteLogger.logError(
+              new Error("Cannot update message status: matchId is null or undefined"), 
+              'ChatScreen.handleMessageRead'
+            );
             return;
           }
           
@@ -341,6 +464,7 @@ const ChatScreen = ({ route, navigation }) => {
         // User status handlers
         const handleOpponentLeftMatch = (data) => {
           console.log('Opponent left match event received:', data);
+          remoteLogger.log('Opponent left match', { data });
           setIsMatchActive(false);
           
           // Check if we have opponent data to personalize the message
@@ -348,6 +472,10 @@ const ChatScreen = ({ route, navigation }) => {
           if (data && data.userId) {
             message = `User ${data.userId.substring(0, 8)}... has left the match.`;
           }
+          
+          // Make sure to reset the match and search state in Redux before navigating back
+          dispatch(setCurrentMatch(null));
+          dispatch(setIsSearching(false));
           
           Alert.alert('Opponent Left', message, [
             { text: 'OK', onPress: () => navigation.goBack() }
@@ -400,6 +528,27 @@ const ChatScreen = ({ route, navigation }) => {
         const handleReconnect = (attemptNumber) => {
           console.log(`Socket reconnected after ${attemptNumber} attempts`);
           
+          // Validate matchId before processing messages
+          if (!matchId) {
+            console.error("Cannot process pending messages: matchId is null or undefined");
+            remoteLogger.logError(
+              new Error("Cannot process pending messages: matchId is null or undefined"), 
+              'ChatScreen.handleReconnect'
+            );
+            return;
+          }
+          
+          // Validate pendingMessagesRef
+          if (!pendingMessagesRef.current) {
+            console.error("Pending messages reference is null or undefined");
+            remoteLogger.logError(
+              new Error("Pending messages reference is null or undefined"), 
+              'ChatScreen.handleReconnect'
+            );
+            pendingMessagesRef.current = []; // Reset to empty array to prevent future errors
+            return;
+          }
+          
           // Process any pending messages
           if (pendingMessagesRef.current.length > 0) {
             console.log(`Processing ${pendingMessagesRef.current.length} pending messages`);
@@ -410,6 +559,16 @@ const ChatScreen = ({ route, navigation }) => {
             
             // Send each message
             messagesToSend.forEach(pendingMessage => {
+              // Validate message before sending
+              if (!pendingMessage || !pendingMessage.id) {
+                console.error("Invalid pending message:", pendingMessage);
+                remoteLogger.logError(
+                  new Error(`Invalid pending message: ${JSON.stringify(pendingMessage)}`), 
+                  'ChatScreen.handleReconnect'
+                );
+                return; // Skip this message
+              }
+              
               console.log('Sending pending message:', pendingMessage.id);
               sendMessage(pendingMessage, matchId, (response) => {
                 if (response && response.error) {
