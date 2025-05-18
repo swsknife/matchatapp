@@ -26,7 +26,8 @@ import remoteLogger from '../utils/remoteLogger';
 import { 
   getUserId,
   updateActivity,
-  getSessionTimeouts
+  getSessionTimeouts,
+  resetInactivityTimer
 } from '../utils/sessionManager';
 
   /**
