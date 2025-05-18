@@ -97,10 +97,13 @@ function isRateLimited(identifier, limit = 5, windowMs = 60000) {
     };
   }
 
-  // Increment count and check if rate limited
+  // Check if rate limited BEFORE incrementing count
+  const isLimited = rateLimits[identifier].count >= limit;
+  
+  // Increment count regardless of whether limited or not
   rateLimits[identifier].count++;
 
-  return rateLimits[identifier].count > limit;
+  return isLimited;
 }
 
 /**
@@ -118,6 +121,28 @@ function cleanupRateLimits() {
 // Clean up rate limits every 5 minutes
 const rateLimitCleanupInterval = setInterval(cleanupRateLimits, 5 * 60 * 1000);
 
+/**
+ * Create a wrapper function for all socket event handlers to ensure consistent error handling
+ * @param {Function} handler - The event handler function
+ * @returns {Function} Wrapped handler with error handling
+ */
+function safeSocketHandler(handler) {
+  return function(...args) {
+    try {
+      handler.apply(this, args);
+    } catch (error) {
+      console.error('Unhandled error in socket event handler:', error);
+      // Try to notify the client if possible
+      if (this && this.emit) {
+        this.emit('error', { 
+          message: 'Server encountered an error processing your request',
+          code: 'INTERNAL_ERROR'
+        });
+      }
+    }
+  };
+}
+
 io.on('connection', (socket) => {
   logger.info('A user connected', { 
     socketId: socket.id, 
@@ -132,7 +157,7 @@ io.on('connection', (socket) => {
                    'unknown';
                    
   // Handle ping for debugging
-  socket.on('ping', (data, callback) => {
+  socket.on('ping', safeSocketHandler((data, callback) => {
     logger.debug('Received ping from client', { socketId: socket.id, data });
     if (callback && typeof callback === 'function') {
       callback({ 
@@ -142,10 +167,10 @@ io.on('connection', (socket) => {
         echo: data
       });
     }
-  });
+  }));
   
   // Check if a match is still active
-  socket.on('checkMatchActive', ({ matchId }, callback) => {
+  socket.on('checkMatchActive', safeSocketHandler(({ matchId }, callback) => {
     logger.debug('Checking if match is active', { socketId: socket.id, matchId });
     
     if (!callback || typeof callback !== 'function') {
@@ -153,30 +178,17 @@ io.on('connection', (socket) => {
       return;
     }
     
-    try {
-      const isActive = !!activeMatches[matchId];
-      logger.debug(`Match ${matchId} active status: ${isActive}`, { socketId: socket.id });
-      
-      callback({
-        active: isActive,
-        timestamp: Date.now()
-      });
-    } catch (error) {
-      logger.error('Error checking match active status', { 
-        socketId: socket.id, 
-        matchId, 
-        error: error.message 
-      });
-      
-      callback({
-        error: 'Failed to check match status',
-        active: false
-      });
-    }
-  });
+    const isActive = !!activeMatches[matchId];
+    logger.debug(`Match ${matchId} active status: ${isActive}`, { socketId: socket.id });
+    
+    callback({
+      active: isActive,
+      timestamp: Date.now()
+    });
+  }));
 
   // Store userId in socket for easier access
-  socket.on('joinMatch', ({ matchId, userId }) => {
+  socket.on('joinMatch', safeSocketHandler(({ matchId, userId }) => {
     try {
       if (!matchId || !userId) {
         console.log('Invalid joinMatch parameters:', { matchId, userId });
@@ -192,6 +204,20 @@ io.on('connection', (socket) => {
           message: 'This match has ended or does not exist.'
         });
         return;
+      }
+
+      // Leave all other match rooms before joining this one
+      if (socket.rooms) {
+        // Get all rooms this socket is in (except its own room)
+        const currentRooms = Array.from(socket.rooms).filter(
+          room => room !== socket.id && room !== matchId
+        );
+        
+        // Leave all other match rooms
+        currentRooms.forEach(room => {
+          console.log(`User ${userId} leaving room ${room} before joining ${matchId}`);
+          socket.leave(room);
+        });
       }
 
       socket.userId = userId; // Store userId in socket
@@ -217,11 +243,10 @@ io.on('connection', (socket) => {
   });
 
   // Check active matches for a user
-  socket.on('checkActiveMatches', () => {
-    try {
-      const userMatches = Object.values(activeMatches).filter(match =>
-        match.players.some(p => p.socketId === socket.id)
-      );
+  socket.on('checkActiveMatches', safeSocketHandler(() => {
+    const userMatches = Object.values(activeMatches).filter(match =>
+      match.players.some(p => p.socketId === socket.id)
+    );
 
       // Add additional match information for the client
       const matchesWithDetails = userMatches.map(match => {
@@ -241,19 +266,14 @@ io.on('connection', (socket) => {
 
       socket.emit('activeMatches', { matches: matchesWithDetails });
       console.log(`Sent ${matchesWithDetails.length} active matches to ${socket.id}`);
-    } catch (error) {
-      console.error('Error in checkActiveMatches handler:', error);
-      socket.emit('error', { message: 'Server error while checking active matches' });
-    }
-  });
+  }));
 
   // Handle temporary navigation away
-  socket.on('navigatingAway', ({ matchId }) => {
-    try {
-      if (!matchId) {
-        console.log('Invalid navigatingAway parameters:', { matchId });
-        return;
-      }
+  socket.on('navigatingAway', safeSocketHandler(({ matchId }) => {
+    if (!matchId) {
+      console.log('Invalid navigatingAway parameters:', { matchId });
+      return;
+    }
 
       console.log(`${socket.id} temporarily navigating away from match ${matchId}`);
       const match = activeMatches[matchId];
@@ -273,18 +293,14 @@ io.on('connection', (socket) => {
       } else {
         console.log(`Cannot update status: match ${matchId} not found`);
       }
-    } catch (error) {
-      console.error('Error in navigatingAway handler:', error);
-    }
-  });
+  }));
 
   // Handle returning to match
-  socket.on('navigatingBack', ({ matchId }) => {
-    try {
-      if (!matchId) {
-        console.log('Invalid navigatingBack parameters:', { matchId });
-        return;
-      }
+  socket.on('navigatingBack', safeSocketHandler(({ matchId }) => {
+    if (!matchId) {
+      console.log('Invalid navigatingBack parameters:', { matchId });
+      return;
+    }
 
       console.log(`${socket.id} returned to match ${matchId}`);
       const match = activeMatches[matchId];
@@ -304,29 +320,36 @@ io.on('connection', (socket) => {
       } else {
         console.log(`Cannot update status: match ${matchId} not found`);
       }
-    } catch (error) {
-      console.error('Error in navigatingBack handler:', error);
-    }
-  });
+  }));
 
   // Handle starting a search
-  socket.on('startSearch', (searchParams) => {
-    try {
-      console.log('Player searching:', searchParams);
+  socket.on('startSearch', safeSocketHandler((searchParams, callback) => {
+    console.log('Player searching:', searchParams);
 
-      if (!searchParams || !searchParams.userId) {
-        console.log('Invalid search parameters:', searchParams);
+    if (!searchParams || !searchParams.userId) {
+      console.log('Invalid search parameters:', searchParams);
+      if (typeof callback === 'function') {
+        callback({ error: 'Invalid search parameters' });
+      } else {
         socket.emit('error', { message: 'Invalid search parameters' });
-        return;
       }
+      return;
+    }
 
       // Apply rate limiting - 5 search requests per minute per IP
       if (isRateLimited(clientIp, 5, 60000)) {
         console.log(`Rate limit exceeded for IP: ${clientIp}`);
-        socket.emit('error', {
-          message: 'Too many search requests. Please wait a moment before trying again.',
-          code: 'RATE_LIMITED'
-        });
+        if (typeof callback === 'function') {
+          callback({ 
+            error: 'Too many search requests. Please wait a moment before trying again.',
+            code: 'RATE_LIMITED'
+          });
+        } else {
+          socket.emit('error', {
+            message: 'Too many search requests. Please wait a moment before trying again.',
+            code: 'RATE_LIMITED'
+          });
+        }
         return;
       }
 
@@ -388,22 +411,22 @@ io.on('connection', (socket) => {
 
         // Notify client that search has started
         socket.emit('searchStarted', { success: true });
+        
+        // Call the callback if provided
+        if (typeof callback === 'function') {
+          callback({ success: true });
+        }
       }
-    } catch (error) {
-      console.error('Error in startSearch handler:', error);
-      socket.emit('error', { message: 'Server error while starting search' });
-    }
-  });
+  }));
 
   // Handle canceling a search
-  socket.on('cancelSearch', () => {
-    try {
-      console.log(`Player ${socket.id} canceling search`);
+  socket.on('cancelSearch', safeSocketHandler(() => {
+    console.log(`Player ${socket.id} canceling search`);
 
-      // Remove from active searches
-      if (activeSearches[socket.id]) {
-        delete activeSearches[socket.id];
-      }
+    // Remove from active searches
+    if (activeSearches[socket.id]) {
+      delete activeSearches[socket.id];
+    }
 
       // Remove from waiting rooms
       for (const roomId in waitingRooms) {
@@ -437,24 +460,19 @@ io.on('connection', (socket) => {
 
       // If we get here, player wasn't in a waiting room
       socket.emit('searchCanceled', { success: false, message: 'No active search found' });
-    } catch (error) {
-      console.error('Error in cancelSearch handler:', error);
-      socket.emit('error', { message: 'Server error while canceling search' });
-    }
-  });
+  }));
 
   // Handle sending messages
-  socket.on('sendMessage', ({ message, matchId }, callback) => {
-    try {
-      console.log('Message received:', message, 'in room', matchId);
+  socket.on('sendMessage', safeSocketHandler(({ message, matchId }, callback) => {
+    console.log('Message received:', message, 'in room', matchId);
 
-      // Validate required parameters
-      if (!message || !matchId) {
-        console.log('Invalid message parameters:', { message, matchId });
-        if (callback) callback({ error: 'Invalid message parameters' });
-        socket.emit('error', { message: 'Invalid message parameters' });
-        return;
-      }
+    // Validate required parameters
+    if (!message || !matchId) {
+      console.log('Invalid message parameters:', { message, matchId });
+      if (callback) callback({ error: 'Invalid message parameters' });
+      socket.emit('error', { message: 'Invalid message parameters' });
+      return;
+    }
 
       // Validate message object structure
       if (!message.id || !message.text || !message.sender) {
@@ -515,20 +533,14 @@ io.on('connection', (socket) => {
         
         if (callback) callback({ error: 'Match not found or invalid' });
       }
-    } catch (error) {
-      console.error('Error in sendMessage handler:', error);
-      socket.emit('error', { message: 'Server error while sending message' });
-      if (callback) callback({ error: 'Server error while sending message' });
-    }
-  });
+  }));
 
   // Handle message read status
-  socket.on('messageRead', ({ messageId, matchId }) => {
-    try {
-      if (!messageId || !matchId) {
-        console.log('Invalid messageRead parameters:', { messageId, matchId });
-        return;
-      }
+  socket.on('messageRead', safeSocketHandler(({ messageId, matchId }) => {
+    if (!messageId || !matchId) {
+      console.log('Invalid messageRead parameters:', { messageId, matchId });
+      return;
+    }
 
       if (activeMatches[matchId]) {
         console.log('Message read:', messageId, 'in match:', matchId);
@@ -574,21 +586,17 @@ io.on('connection', (socket) => {
       } else {
         console.log(`Cannot mark message as read: match ${matchId} not found`);
       }
-    } catch (error) {
-      console.error('Error in messageRead handler:', error);
-    }
-  });
+  }));
 
   // Handle leaving a match
-  socket.on('leaveMatch', ({ matchId, userId, isNavigatingAway }) => {
-    try {
-      console.log(`User ${userId} is leaving match ${matchId}`);
+  socket.on('leaveMatch', safeSocketHandler(({ matchId, userId, isNavigatingAway }) => {
+    console.log(`User ${userId} is leaving match ${matchId}`);
 
-      if (!matchId) {
-        console.log('Invalid leaveMatch parameters:', { matchId, userId });
-        socket.emit('error', { message: 'Invalid match parameters' });
-        return;
-      }
+    if (!matchId) {
+      console.log('Invalid leaveMatch parameters:', { matchId, userId });
+      socket.emit('error', { message: 'Invalid match parameters' });
+      return;
+    }
 
       const match = activeMatches[matchId];
 
@@ -630,24 +638,14 @@ io.on('connection', (socket) => {
         // Still send confirmation for the specific match ID
         socket.emit(`matchLeft_${matchId}`, { success: false });
       }
-    } catch (error) {
-      console.error('Error in leaveMatch handler:', error);
-      socket.emit('error', { message: 'Server error while leaving match' });
-      // Store matchId in a variable that's safe to use in the catch block
-      if (matchId) {
-        // Only send confirmation if matchId is defined
-        socket.emit(`matchLeft_${matchId}`, { success: false, error: true });
-      }
-    }
-  });
+  }));
 
   // Handle disconnection
-  socket.on('disconnect', () => {
-    try {
-      console.log('User disconnected:', socket.id);
+  socket.on('disconnect', safeSocketHandler(() => {
+    console.log('User disconnected:', socket.id);
 
-      // Clean up waiting rooms and active searches
-      handleDisconnect(socket.id);
+    // Clean up waiting rooms and active searches
+    handleDisconnect(socket.id);
 
       // Handle active matches
       for (const matchId in activeMatches) {
@@ -673,10 +671,7 @@ io.on('connection', (socket) => {
           break;
         }
       }
-    } catch (error) {
-      console.error('Error in disconnect handler:', error);
-    }
-  });
+  }));
 });
 
 /**

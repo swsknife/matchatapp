@@ -7,7 +7,7 @@
 
 import { REACT_APP_SERVER_URL } from '@env';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { Platform, ErrorUtils } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 
 // Constants
