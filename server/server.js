@@ -240,7 +240,7 @@ io.on('connection', (socket) => {
       console.error('Error in joinMatch handler:', error);
       socket.emit('error', { message: 'Server error while joining match' });
     }
-  });
+  }));
 
   // Check active matches for a user
   socket.on('checkActiveMatches', safeSocketHandler(() => {
