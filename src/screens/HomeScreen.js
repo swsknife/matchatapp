@@ -74,7 +74,7 @@ const HomeScreen = ({ navigation }) => {
    * Load user ID
    */
   useEffect(() => {
-    const loadUserId = async () => {
+    const loadUserIdAndConnect = async () => {
       try {
         // Load or generate user ID
         const id = await getUserId();
@@ -85,13 +85,36 @@ const HomeScreen = ({ navigation }) => {
         
         // Log initialization
         remoteLogger.log('HomeScreen initialized with user ID', { userId: id });
+        
+        // Initialize socket connection
+        console.log('Initializing socket connection on HomeScreen mount');
+        try {
+          await initializeSocket(20000);
+          console.log('Socket connection established successfully');
+        } catch (error) {
+          console.error('Failed to initialize socket on mount:', error);
+          remoteLogger.logError(error, 'HomeScreen.initializeSocket');
+          Alert.alert(
+            'Connection Error',
+            'Failed to connect to the server. Some features may not work properly.',
+            [
+              {
+                text: 'Retry',
+                onPress: () => initializeSocket(20000)
+                  .then(() => console.log('Reconnection successful'))
+                  .catch(err => console.error('Reconnection failed:', err))
+              },
+              { text: 'OK' }
+            ]
+          );
+        }
       } catch (error) {
         console.error('Failed to load user ID:', error);
         remoteLogger.logError(error, 'HomeScreen.loadUserId');
       }
     };
     
-    loadUserId();
+    loadUserIdAndConnect();
   }, []);
 
   /**
@@ -1040,15 +1063,13 @@ const HomeScreen = ({ navigation }) => {
         </Text>
       </View>
 
-      {/* Debug button - only visible in development */}
-      {__DEV__ && (
-        <TouchableOpacity
-          style={styles.debugButton}
-          onPress={() => navigation.navigate('Debug')}
-        >
-          <Text style={styles.debugButtonText}>Debug Console</Text>
-        </TouchableOpacity>
-      )}
+      {/* Debug button - always visible for testing */}
+      <TouchableOpacity
+        style={styles.debugButton}
+        onPress={() => navigation.navigate('Debug')}
+      >
+        <Text style={styles.debugButtonText}>Debug Console</Text>
+      </TouchableOpacity>
       
 
     </View>

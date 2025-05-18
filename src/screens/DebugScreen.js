@@ -20,6 +20,8 @@ import { REACT_APP_SERVER_URL } from '@env';
 import NetInfo from '@react-native-community/netinfo';
 import { useSelector } from 'react-redux';
 import apiLogger from '../utils/apiLogger';
+import remoteLogger from '../utils/remoteLogger';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 /**
  * Custom Debug Screen for the app
@@ -43,11 +45,21 @@ const DebugScreen = ({ navigation }) => {
   const [showApiLogModal, setShowApiLogModal] = useState(false);
   const [selectedApiLog, setSelectedApiLog] = useState(null);
   const [apiLogs, setApiLogs] = useState([]);
+  const [errorLogs, setErrorLogs] = useState([]);
+  const [isLoadingErrorLogs, setIsLoadingErrorLogs] = useState(false);
+  const [selectedErrorLog, setSelectedErrorLog] = useState(null);
+  const [showErrorLogModal, setShowErrorLogModal] = useState(false);
+  const [logSendStatus, setLogSendStatus] = useState(null);
   
   // Initialize API logging
   useEffect(() => {
     apiLogger.initApiLogging();
     return () => apiLogger.restoreFetch();
+  }, []);
+  
+  // Load error logs from AsyncStorage
+  useEffect(() => {
+    loadErrorLogs();
   }, []);
   
   // Refresh API logs periodically
@@ -169,6 +181,96 @@ const DebugScreen = ({ navigation }) => {
   const addLog = (message) => {
     const timestamp = new Date().toISOString();
     setLogs((prevLogs) => [{ timestamp, message }, ...prevLogs.slice(0, 19)]);
+  };
+  
+  // Load error logs from AsyncStorage
+  const loadErrorLogs = async () => {
+    try {
+      setIsLoadingErrorLogs(true);
+      addLog('Loading error logs from storage...');
+      
+      const logsJson = await AsyncStorage.getItem('@MatchChatApp:RemoteLogs');
+      if (logsJson) {
+        const logs = JSON.parse(logsJson);
+        // Filter to only show error and fatal logs
+        const filteredLogs = logs.filter(
+          log => log.level === 'error' || log.level === 'fatal'
+        );
+        setErrorLogs(filteredLogs);
+        addLog(`Loaded ${filteredLogs.length} error logs`);
+      } else {
+        setErrorLogs([]);
+        addLog('No error logs found in storage');
+      }
+    } catch (error) {
+      console.error('Failed to load error logs:', error);
+      addLog(`Failed to load error logs: ${error.message}`);
+    } finally {
+      setIsLoadingErrorLogs(false);
+    }
+  };
+  
+  // Manually send logs to server
+  const sendLogsToServer = async () => {
+    try {
+      addLog('Sending logs to server...');
+      setLogSendStatus('sending');
+      
+      const result = await remoteLogger.sendLogs(true);
+      
+      if (result.success) {
+        addLog(`Successfully sent ${result.sent} logs to server`);
+        setLogSendStatus('success');
+        
+        // Reload logs to show updated state
+        await loadErrorLogs();
+        
+        Alert.alert(
+          'Logs Sent',
+          `Successfully sent ${result.sent} logs to server. ${result.failed} logs failed to send.`
+        );
+      } else {
+        addLog(`Failed to send logs: ${result.error || 'Unknown error'}`);
+        setLogSendStatus('error');
+        
+        Alert.alert(
+          'Error Sending Logs',
+          `Failed to send logs: ${result.error || 'Unknown error'}`
+        );
+      }
+    } catch (error) {
+      console.error('Error sending logs:', error);
+      addLog(`Error sending logs: ${error.message}`);
+      setLogSendStatus('error');
+      
+      Alert.alert(
+        'Error Sending Logs',
+        `An unexpected error occurred: ${error.message}`
+      );
+    } finally {
+      // Reset status after a delay
+      setTimeout(() => setLogSendStatus(null), 3000);
+    }
+  };
+  
+  // Generate a test error for debugging
+  const generateTestError = () => {
+    try {
+      addLog('Generating test error...');
+      // Deliberately cause an error
+      throw new Error('This is a test error from Debug Screen');
+    } catch (error) {
+      remoteLogger.logError(error, 'DebugScreen.generateTestError');
+      addLog(`Test error generated and logged: ${error.message}`);
+      
+      // Reload logs to show the new error
+      loadErrorLogs();
+      
+      Alert.alert(
+        'Test Error Generated',
+        'A test error has been generated and logged. Check the Error Logs section to see it.'
+      );
+    }
   };
 
   // Simulate performance metrics
@@ -333,6 +435,83 @@ const DebugScreen = ({ navigation }) => {
               onChangeText={setCustomEndpoint}
               editable={useCustomEndpoint}
             />
+          </View>
+        ))}
+        
+        {/* Crash Reporting */}
+        {renderSection('Crash Reporting & Error Logs', (
+          <View>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity 
+                style={[styles.button, styles.crashButton]} 
+                onPress={loadErrorLogs}
+              >
+                <Text style={styles.buttonText}>Refresh Error Logs</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[
+                  styles.button, 
+                  styles.crashButton,
+                  logSendStatus === 'sending' ? styles.buttonDisabled : null
+                ]} 
+                onPress={sendLogsToServer}
+                disabled={logSendStatus === 'sending'}
+              >
+                {logSendStatus === 'sending' ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.buttonText}>Send Logs to Server</Text>
+                )}
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.button, styles.crashButton]} 
+                onPress={generateTestError}
+              >
+                <Text style={styles.buttonText}>Generate Test Error</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.logHeader}>
+              <Text style={styles.logHeaderText}>Error Logs</Text>
+              <Text style={styles.logCount}>{errorLogs.length} logs</Text>
+            </View>
+            
+            <View style={styles.logContainer}>
+              {isLoadingErrorLogs ? (
+                <ActivityIndicator size="small" color="#2196F3" />
+              ) : errorLogs.length === 0 ? (
+                <Text style={styles.emptyLogText}>No error logs found</Text>
+              ) : (
+                errorLogs.map((log, index) => (
+                  <TouchableOpacity 
+                    key={index} 
+                    style={[
+                      styles.logEntry, 
+                      { backgroundColor: log.level === 'fatal' ? '#FFEBEE' : '#FFF8E1' }
+                    ]}
+                    onPress={() => {
+                      setSelectedErrorLog(log);
+                      setShowErrorLogModal(true);
+                    }}
+                  >
+                    <Text style={styles.logTimestamp}>
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </Text>
+                    <Text style={[
+                      styles.logLevel, 
+                      { color: log.level === 'fatal' ? '#D32F2F' : '#FF8F00' }
+                    ]}>
+                      {log.level.toUpperCase()}
+                    </Text>
+                    <Text style={styles.logMessage} numberOfLines={1} ellipsizeMode="tail">
+                      {log.message}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
           </View>
         ))}
         
@@ -532,6 +711,90 @@ const DebugScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+      
+      {/* Error Log Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={showErrorLogModal}
+        onRequestClose={() => {
+          setShowErrorLogModal(false);
+          setSelectedErrorLog(null);
+        }}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {selectedErrorLog ? `Error Details` : 'Error Log'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowErrorLogModal(false);
+                  setSelectedErrorLog(null);
+                }}
+              >
+                <Text style={styles.closeButton}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            
+            {selectedErrorLog && (
+              <ScrollView style={styles.modalBody}>
+                <View style={styles.detailSection}>
+                  <Text style={styles.detailTitle}>Timestamp</Text>
+                  <Text style={styles.detailItem}>
+                    {new Date(selectedErrorLog.timestamp).toLocaleString()}
+                  </Text>
+                </View>
+                
+                <View style={styles.detailSection}>
+                  <Text style={styles.detailTitle}>Level</Text>
+                  <Text style={[
+                    styles.detailItem, 
+                    { 
+                      color: selectedErrorLog.level === 'fatal' ? '#D32F2F' : 
+                             selectedErrorLog.level === 'error' ? '#FF8F00' : '#388E3C'
+                    }
+                  ]}>
+                    {selectedErrorLog.level.toUpperCase()}
+                  </Text>
+                </View>
+                
+                <View style={styles.detailSection}>
+                  <Text style={styles.detailTitle}>Message</Text>
+                  <Text style={styles.detailItem}>{selectedErrorLog.message}</Text>
+                </View>
+                
+                {selectedErrorLog.data && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailTitle}>Additional Data</Text>
+                    {Object.entries(selectedErrorLog.data).map(([key, value]) => (
+                      <View key={key} style={styles.dataItem}>
+                        <Text style={styles.dataKey}>{key}:</Text>
+                        <Text style={styles.dataValue}>
+                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                
+                {selectedErrorLog.device && (
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailTitle}>Device Information</Text>
+                    {Object.entries(selectedErrorLog.device).map(([key, value]) => (
+                      <View key={key} style={styles.dataItem}>
+                        <Text style={styles.dataKey}>{key}:</Text>
+                        <Text style={styles.dataValue}>{String(value)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -691,6 +954,36 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     width: 40,
     textAlign: 'right',
+  },
+  logLevel: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    width: 60,
+    textAlign: 'center',
+  },
+  logMessage: {
+    fontSize: 12,
+    flex: 1,
+    marginHorizontal: 4,
+  },
+  logCount: {
+    fontSize: 12,
+    color: '#666',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    flexWrap: 'wrap',
+  },
+  crashButton: {
+    flex: 1,
+    marginHorizontal: 4,
+    marginBottom: 8,
+    backgroundColor: '#673AB7',
+  },
+  buttonDisabled: {
+    backgroundColor: '#9E9E9E',
   },
   // Modal styles
   modalContainer: {

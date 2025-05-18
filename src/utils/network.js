@@ -22,44 +22,61 @@ let socketInstance = null; // Singleton socket instance
  * 
  * @returns {Object} The socket.io instance
  */
-const initializeSocketSingleton = () => {
+const initializeSocketSingleton = async () => {
   if (!socketInstance) {
     console.log("Initializing singleton socket...");
     console.log(`Connecting to server at: ${REACT_APP_SERVER_URL}`);
     
     // First, try to check if the server is reachable with a simple fetch
     // Add timeout and retry logic for the initial ping
-    const pingServer = (retryCount = 0, maxRetries = 3) => {
-      if (retryCount > maxRetries) {
-        console.warn(`Server ping failed after ${maxRetries} attempts. Proceeding with socket connection anyway.`);
-        return;
-      }
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-      
-      fetch(`${REACT_APP_SERVER_URL}/ping`, { 
-        signal: controller.signal,
-        headers: { 'Cache-Control': 'no-cache' }
-      })
-        .then(response => {
-          clearTimeout(timeoutId);
-          console.log('Server ping successful:', response.status);
+    const pingServer = async (retryCount = 0, maxRetries = 3) => {
+      return new Promise((resolve, reject) => {
+        if (retryCount > maxRetries) {
+          console.warn(`Server ping failed after ${maxRetries} attempts. Proceeding with socket connection anyway.`);
+          resolve(false); // Resolve with false to indicate ping failed
+          return;
+        }
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        
+        fetch(`${REACT_APP_SERVER_URL}/ping`, { 
+          signal: controller.signal,
+          headers: { 'Cache-Control': 'no-cache' }
         })
-        .catch(error => {
-          clearTimeout(timeoutId);
-          console.error(`Server ping attempt ${retryCount + 1} failed:`, error);
-          
-          // Retry after a delay
-          if (retryCount < maxRetries) {
-            console.log(`Retrying server ping in ${(retryCount + 1) * 1000}ms...`);
-            setTimeout(() => pingServer(retryCount + 1, maxRetries), (retryCount + 1) * 1000);
-          }
-        });
+          .then(response => {
+            clearTimeout(timeoutId);
+            console.log('Server ping successful:', response.status);
+            resolve(true); // Resolve with true to indicate ping succeeded
+          })
+          .catch(error => {
+            clearTimeout(timeoutId);
+            console.error(`Server ping attempt ${retryCount + 1} failed:`, error);
+            
+            // Retry after a delay
+            if (retryCount < maxRetries) {
+              console.log(`Retrying server ping in ${(retryCount + 1) * 1000}ms...`);
+              setTimeout(() => {
+                pingServer(retryCount + 1, maxRetries).then(resolve).catch(reject);
+              }, (retryCount + 1) * 1000);
+            } else {
+              resolve(false); // Resolve with false after all retries failed
+            }
+          });
+      });
     };
     
-    pingServer();
+    // Wait for ping result before creating socket
+    const pingSuccessful = await pingServer();
+    console.log(`Ping result: ${pingSuccessful ? 'successful' : 'failed'}`);
+    
+    // If ping failed, add a small delay before attempting socket connection
+    if (!pingSuccessful) {
+      console.log("Server ping failed, will attempt socket connection anyway after delay");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
       
+    // Create socket instance with improved configuration
     socketInstance = io(REACT_APP_SERVER_URL, {
       reconnection: true,           // Enable automatic reconnection
       reconnectionAttempts: 5,      // Maximum number of reconnection attempts
@@ -70,12 +87,16 @@ const initializeSocketSingleton = () => {
       pingInterval: 25000,          // Send a ping every 25 seconds
       pingTimeout: 20000,           // Consider connection dead if no pong within 20 seconds
       transports: ['websocket', 'polling'], // Try websocket first, then fall back to polling
-      forceNew: false,              // Reuse existing connection if available
+      forceNew: true,               // Force a new connection to ensure clean state
       upgrade: true,                // Allow transport upgrade
       rememberUpgrade: true,        // Remember the transport upgrade
       autoConnect: true,            // Connect automatically
       rejectUnauthorized: false     // Ignore SSL certificate issues (for development only)
     });
+    
+    // Log socket instance details
+    console.log("Socket instance created:", socketInstance.id);
+    console.log("Socket connection state:", socketInstance.connected ? "connected" : "disconnected");
 
     // Set up connection status event handlers
     socketInstance.on('connect', () => {
@@ -187,11 +208,20 @@ const initializeSocketSingleton = () => {
  * @returns {Promise} Resolves with socket instance when connected
  */
 export const initializeSocket = (timeoutMs = 15000) => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     try {
-      const socket = initializeSocketSingleton();
+      // Force a clean socket instance by disconnecting any existing one
+      if (socketInstance) {
+        console.log("Disconnecting existing socket before initialization");
+        socketInstance.disconnect();
+        socketInstance = null;
+      }
+      
+      // Get a fresh socket instance - now awaiting the async function
+      const socket = await initializeSocketSingleton();
       
       if (!socket) {
+        store.dispatch(setConnectionStatus('disconnected'));
         reject(new Error('Failed to initialize socket instance'));
         return;
       }
@@ -199,9 +229,13 @@ export const initializeSocket = (timeoutMs = 15000) => {
       // If already connected, resolve immediately
       if (socket.connected) {
         console.log("Socket already connected, resolving immediately");
+        store.dispatch(setConnectionStatus('connected'));
         resolve(socket);
         return;
       }
+      
+      // Set status to reconnecting while we wait
+      store.dispatch(setConnectionStatus('reconnecting'));
       
       // Set up a timeout to reject the promise if connection takes too long
       const timeoutId = setTimeout(() => {
@@ -210,6 +244,7 @@ export const initializeSocket = (timeoutMs = 15000) => {
         socket.off('connect_error', errorHandler);
         socket.off('disconnect', disconnectHandler);
         
+        store.dispatch(setConnectionStatus('disconnected'));
         const timeoutError = new Error(`Socket connection timed out after ${timeoutMs}ms`);
         console.error(timeoutError);
         reject(timeoutError);
@@ -219,18 +254,21 @@ export const initializeSocket = (timeoutMs = 15000) => {
       const connectHandler = () => {
         clearTimeout(timeoutId);
         console.log("Socket connected in initializeSocket promise");
+        store.dispatch(setConnectionStatus('connected'));
         resolve(socket);
       };
       
       const errorHandler = (error) => {
         clearTimeout(timeoutId);
         console.error("Socket connection error in initializeSocket promise:", error);
+        store.dispatch(setConnectionStatus('disconnected'));
         reject(error);
       };
       
       const disconnectHandler = (reason) => {
         clearTimeout(timeoutId);
         console.error("Socket disconnected during initialization:", reason);
+        store.dispatch(setConnectionStatus('disconnected'));
         reject(new Error(`Socket disconnected during initialization: ${reason}`));
       };
       
@@ -239,16 +277,12 @@ export const initializeSocket = (timeoutMs = 15000) => {
       socket.once('connect_error', errorHandler);
       socket.once('disconnect', disconnectHandler);
       
-      // If socket is already connecting, log it
-      if (socket.connecting) {
-        console.log("Socket is in connecting state, waiting...");
-      } else {
-        // If not connected and not connecting, try to connect
-        console.log("Socket is not connecting, attempting to connect...");
-        socket.connect();
-      }
+      // Always try to connect explicitly
+      console.log("Explicitly connecting socket...");
+      socket.connect();
     } catch (error) {
       console.error("Error in initializeSocket:", error);
+      store.dispatch(setConnectionStatus('disconnected'));
       reject(error);
     }
   });
@@ -269,7 +303,28 @@ export const getSocketInstance = () => initializeSocketSingleton();
 export const manualReconnect = () => {
   if (socketInstance) {
     console.log("Manually reconnecting socket...");
-    socketInstance.connect();
+    store.dispatch(setConnectionStatus('reconnecting'));
+    
+    // Disconnect first to ensure a clean connection
+    socketInstance.disconnect();
+    
+    // Wait a moment before reconnecting
+    setTimeout(() => {
+      socketInstance.connect();
+      
+      // Set up a one-time connect handler to update status
+      socketInstance.once('connect', () => {
+        console.log("Manual reconnection successful");
+        store.dispatch(setConnectionStatus('connected'));
+      });
+      
+      // Set up a one-time error handler
+      socketInstance.once('connect_error', (error) => {
+        console.error("Manual reconnection failed:", error);
+        store.dispatch(setConnectionStatus('reconnect_failed'));
+      });
+    }, 1000);
+    
     return true;
   }
   return false;
@@ -283,28 +338,27 @@ export const disconnectSocket = () => {
   if (socketInstance) {
     console.log("Disconnecting socket...");
     
-    // Remove all listeners before disconnecting
-    // This prevents memory leaks from lingering event handlers
-    if (socketInstance.hasListeners('connect')) socketInstance.off('connect');
-    if (socketInstance.hasListeners('connect_error')) socketInstance.off('connect_error');
-    if (socketInstance.hasListeners('disconnect')) socketInstance.off('disconnect');
-    if (socketInstance.hasListeners('reconnect')) socketInstance.off('reconnect');
-    if (socketInstance.hasListeners('reconnect_attempt')) socketInstance.off('reconnect_attempt');
-    if (socketInstance.hasListeners('reconnect_error')) socketInstance.off('reconnect_error');
-    if (socketInstance.hasListeners('reconnect_failed')) socketInstance.off('reconnect_failed');
+    // Remove all listeners without checking - Socket.IO handles missing listeners gracefully
+    socketInstance.off('connect');
+    socketInstance.off('connect_error');
+    socketInstance.off('disconnect');
+    socketInstance.off('reconnect');
+    socketInstance.off('reconnect_attempt');
+    socketInstance.off('reconnect_error');
+    socketInstance.off('reconnect_failed');
     
     // Remove all custom event listeners
-    if (socketInstance.hasListeners('matchFound')) socketInstance.off('matchFound');
-    if (socketInstance.hasListeners('matchEnded')) socketInstance.off('matchEnded');
-    if (socketInstance.hasListeners('activeMatches')) socketInstance.off('activeMatches');
-    if (socketInstance.hasListeners('matchLeft')) socketInstance.off('matchLeft');
-    if (socketInstance.hasListeners('playerLeft')) socketInstance.off('playerLeft');
-    if (socketInstance.hasListeners('opponentLeftMatch')) socketInstance.off('opponentLeftMatch');
-    if (socketInstance.hasListeners('message')) socketInstance.off('message');
-    if (socketInstance.hasListeners('messageDelivered')) socketInstance.off('messageDelivered');
-    if (socketInstance.hasListeners('messageRead')) socketInstance.off('messageRead');
-    if (socketInstance.hasListeners('searchTimeout')) socketInstance.off('searchTimeout');
-    if (socketInstance.hasListeners('client_reconnected')) socketInstance.off('client_reconnected');
+    socketInstance.off('matchFound');
+    socketInstance.off('matchEnded');
+    socketInstance.off('activeMatches');
+    socketInstance.off('matchLeft');
+    socketInstance.off('playerLeft');
+    socketInstance.off('opponentLeftMatch');
+    socketInstance.off('message');
+    socketInstance.off('messageDelivered');
+    socketInstance.off('messageRead');
+    socketInstance.off('searchTimeout');
+    socketInstance.off('client_reconnected');
     
     // Disconnect the socket
     socketInstance.disconnect();
@@ -428,25 +482,34 @@ export const sendMessage = (message, matchId, callback, retryCount = 0) => {
       message: "Connection lost. Message will be sent when reconnected."
     });
     
-    // Set up a one-time reconnect handler to try sending again when reconnected
-    const reconnectHandler = () => {
+    // Store the reconnect handler on the message object to be able to remove it later
+    message._reconnectHandler = () => {
       console.log("Socket reconnected, attempting to resend message");
-      socket.off('connect', reconnectHandler); // Remove this handler
+      socket.off('connect', message._reconnectHandler); // Remove this handler
+      delete message._reconnectHandler; // Clean up reference
       // Try sending again with a fresh retry count
       sendMessage(message, matchId, callback, 0);
     };
     
-    socket.once('connect', reconnectHandler);
+    socket.once('connect', message._reconnectHandler);
     return;
   }
   
   console.log("Sending message:", message);
+  
+  // Create a unique identifier for this send attempt to track timeouts
+  const sendAttemptId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
   
   // Add a timeout to detect if the message wasn't acknowledged
   const timeoutId = setTimeout(() => {
     // Check if socket is still connected before retrying
     if (socket.connected && retryCount < 3) {
       console.log(`Message send timeout, retrying (${retryCount + 1}/3)...`);
+      // Cancel any previous reconnect handlers for this message
+      if (message._reconnectHandler) {
+        socket.off('connect', message._reconnectHandler);
+        delete message._reconnectHandler;
+      }
       sendMessage(message, matchId, callback, retryCount + 1);
     } else if (!socket.connected) {
       console.error("Failed to send message: Socket disconnected during send");
@@ -456,15 +519,16 @@ export const sendMessage = (message, matchId, callback, retryCount = 0) => {
         message: "Connection lost. Message will be sent when reconnected."
       });
       
-      // Set up a one-time reconnect handler to try sending again when reconnected
-      const reconnectHandler = () => {
+      // Store the reconnect handler on the message object to be able to remove it later
+      message._reconnectHandler = () => {
         console.log("Socket reconnected, attempting to resend message");
-        socket.off('connect', reconnectHandler); // Remove this handler
+        socket.off('connect', message._reconnectHandler); // Remove this handler
+        delete message._reconnectHandler; // Clean up reference
         // Try sending again with a fresh retry count
         sendMessage(message, matchId, callback, 0);
       };
       
-      socket.once('connect', reconnectHandler);
+      socket.once('connect', message._reconnectHandler);
     } else {
       console.error("Failed to send message after 3 attempts");
       if (callback) callback({ error: "Message delivery timeout" });
@@ -473,6 +537,11 @@ export const sendMessage = (message, matchId, callback, retryCount = 0) => {
   
   socket.emit("sendMessage", { message, matchId }, (response) => {
     clearTimeout(timeoutId);
+    // If we got a response, remove any reconnect handler
+    if (message._reconnectHandler) {
+      socket.off('connect', message._reconnectHandler);
+      delete message._reconnectHandler;
+    }
     if (callback) callback(response);
   });
 };
@@ -744,6 +813,7 @@ export const onMessageRead = (callback) => {
 
 // Queue for read status messages that couldn't be sent due to connection issues
 const pendingReadStatuses = [];
+const MAX_QUEUED_READ_STATUSES = 50; // Reasonable limit for a new app
 
 /**
  * Marks a message as read and notifies the server.
@@ -808,6 +878,12 @@ const queueReadStatus = (messageId, matchId) => {
   );
   
   if (!isAlreadyQueued) {
+    // If queue is at capacity, remove oldest item
+    if (pendingReadStatuses.length >= MAX_QUEUED_READ_STATUSES) {
+      pendingReadStatuses.shift(); // Remove oldest item
+      console.log(`Read status queue at capacity, removed oldest item. Queue size: ${pendingReadStatuses.length}`);
+    }
+    
     // Add to queue with timestamp for debugging
     pendingReadStatuses.push({
       messageId,
