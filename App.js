@@ -9,6 +9,7 @@ import ChatScreen from './src/screens/ChatScreen';
 import DebugScreen from './src/screens/DebugScreen';
 import { startPeriodicCleanup, stopPeriodicCleanup } from './src/utils/storageCleanup';
 import remoteLogger from './src/utils/remoteLogger';
+import { initializeSessionManager, cleanupSessionManager } from './src/utils/sessionManager';
 
 const Stack = createStackNavigator();
 
@@ -21,6 +22,9 @@ const AppContent = () => {
     // Initialize remote logger
     const cleanupLogger = remoteLogger.initRemoteLogger();
     
+    // Initialize session manager
+    initializeSessionManager();
+    
     // Log app start
     remoteLogger.log('Application started', {
       timestamp: new Date().toISOString(),
@@ -31,6 +35,7 @@ const AppContent = () => {
     return () => {
       stopPeriodicCleanup();
       if (cleanupLogger) cleanupLogger();
+      cleanupSessionManager();
     };
   }, []);
   

@@ -97,11 +97,13 @@ function isRateLimited(identifier, limit = 5, windowMs = 60000) {
     };
   }
 
-  // Check if rate limited BEFORE incrementing count
+  // Check if rate limited
   const isLimited = rateLimits[identifier].count >= limit;
   
-  // Increment count regardless of whether limited or not
-  rateLimits[identifier].count++;
+  // Only increment count if not already limited
+  if (!isLimited) {
+    rateLimits[identifier].count++;
+  }
 
   return isLimited;
 }
@@ -122,6 +124,73 @@ function cleanupRateLimits() {
 const rateLimitCleanupInterval = setInterval(cleanupRateLimits, 5 * 60 * 1000);
 
 /**
+ * Clean up abandoned searches and inactive matches
+ */
+function cleanupAbandonedSearchesAndMatches() {
+  const now = Date.now();
+  
+  // Clean up searches that have been active for too long (15 minutes)
+  const SEARCH_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+  for (const socketId in activeSearches) {
+    const search = activeSearches[socketId];
+    if (now - search.timestamp > SEARCH_TIMEOUT) {
+      logger.info(`Cleaning up abandoned search for socket ${socketId}`);
+      delete activeSearches[socketId];
+      
+      // Also remove from waiting rooms if present
+      for (const roomId in waitingRooms) {
+        if (waitingRooms[roomId].socketId === socketId) {
+          delete waitingRooms[roomId];
+          logger.info(`Removed abandoned waiting room ${roomId}`);
+          
+          // Also clean up the waiting room index
+          for (const key in waitingRoomsByKey) {
+            if (waitingRoomsByKey[key] === roomId) {
+              delete waitingRoomsByKey[key];
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Clean up matches that have been inactive for too long (24 hours)
+  const MATCH_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
+  for (const matchId in activeMatches) {
+    const match = activeMatches[matchId];
+    
+    // Check if match has a timestamp, if not add one (for legacy matches)
+    if (!match.timestamp) {
+      match.timestamp = now;
+      continue;
+    }
+    
+    // Check if match has been inactive for too long
+    if (now - match.timestamp > MATCH_TIMEOUT) {
+      logger.info(`Cleaning up inactive match ${matchId}`);
+      
+      // Notify any connected players that the match has ended
+      io.to(matchId).emit('matchEnded', {
+        matchId,
+        message: 'This match has been closed due to inactivity.'
+      });
+      
+      // Remove the match
+      delete activeMatches[matchId];
+    }
+  }
+  
+  logger.info('Cleanup complete', {
+    activeSearches: Object.keys(activeSearches).length,
+    waitingRooms: Object.keys(waitingRooms).length,
+    activeMatches: Object.keys(activeMatches).length
+  });
+}
+
+// Run cleanup every hour
+const cleanupInterval = setInterval(cleanupAbandonedSearchesAndMatches, 60 * 60 * 1000);
+
+/**
  * Create a wrapper function for all socket event handlers to ensure consistent error handling
  * @param {Function} handler - The event handler function
  * @returns {Function} Wrapped handler with error handling
@@ -131,14 +200,46 @@ function safeSocketHandler(handler) {
     try {
       handler.apply(this, args);
     } catch (error) {
+      // Log detailed error information
       console.error('Unhandled error in socket event handler:', error);
+      console.error('Error stack:', error.stack);
+      console.error('Event arguments:', JSON.stringify(args, null, 2));
+      console.error('Socket ID:', this.id);
+      
+      // Categorize errors for better client handling
+      let errorCode = 'INTERNAL_ERROR';
+      let errorMessage = 'Server encountered an error processing your request';
+      
+      if (error.message && error.message.includes('not found')) {
+        errorCode = 'NOT_FOUND';
+        errorMessage = 'The requested resource was not found';
+      } else if (error.message && error.message.includes('permission')) {
+        errorCode = 'PERMISSION_DENIED';
+        errorMessage = 'You do not have permission to perform this action';
+      } else if (error.message && error.message.includes('timeout')) {
+        errorCode = 'TIMEOUT';
+        errorMessage = 'The operation timed out';
+      } else if (error.message && error.message.includes('invalid')) {
+        errorCode = 'INVALID_INPUT';
+        errorMessage = 'The provided input is invalid';
+      }
+      
       // Try to notify the client if possible
       if (this && this.emit) {
         this.emit('error', { 
-          message: 'Server encountered an error processing your request',
-          code: 'INTERNAL_ERROR'
+          message: errorMessage,
+          code: errorCode,
+          details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
       }
+      
+      // Log to server logs for monitoring
+      logger.error('Socket handler error', {
+        socketId: this.id,
+        error: error.message,
+        stack: error.stack,
+        code: errorCode
+      });
     }
   };
 }
@@ -205,6 +306,19 @@ io.on('connection', (socket) => {
         });
         return;
       }
+      
+      // Validate that the user is allowed to join this match
+      const match = activeMatches[matchId];
+      const isPlayerInMatch = match.players.some(player => player.userId === userId);
+      
+      if (!isPlayerInMatch) {
+        console.log(`User ${userId} attempted to join match ${matchId} but is not a participant`);
+        socket.emit('error', { 
+          message: 'You are not authorized to join this match',
+          code: 'UNAUTHORIZED_JOIN'
+        });
+        return;
+      }
 
       // Leave all other match rooms before joining this one
       if (socket.rooms) {
@@ -229,10 +343,11 @@ io.on('connection', (socket) => {
         userId
       });
       
-      // Also emit opponentLeftMatch for backward compatibility
-      socket.to(matchId).emit('opponentLeftMatch', {
+      // Emit playerStatus event to indicate active status
+      socket.to(matchId).emit('playerStatus', {
         matchId,
-        userId
+        userId,
+        isActive: true
       });
 
       console.log(`User ${userId} joined match ${matchId}`);

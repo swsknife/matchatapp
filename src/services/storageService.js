@@ -70,44 +70,48 @@ const safelyParseJSON = (data, defaultValue) => {
  * @param {number} attempt - Current attempt number (for internal use in recursion)
  * @returns {Promise<Array>} Array of message objects
  */
-export const getMessages = async (matchId, attempt = 0) => {
-  try {
-    const key = STORAGE_KEYS.MESSAGES(matchId);
-    const messagesData = await AsyncStorage.getItem(key);
-    return safelyParseJSON(messagesData, []);
-  } catch (error) {
-    handleStorageError(
-      error, 
-      { 
-        severity: ERROR_SEVERITY.WARNING,
-        silent: true,
-        alertMessage: `Failed to get messages (attempt ${attempt + 1})`
-      }
-    );
-    
-    // Implement retry logic
-    if (attempt < MAX_RETRIES) {
-      const delay = getRetryDelay(attempt);
-      console.log(`Retrying in ${delay}ms...`);
+export const getMessages = async (matchId) => {
+  let attempt = 0;
+  
+  while (attempt <= MAX_RETRIES) {
+    try {
+      const key = STORAGE_KEYS.MESSAGES(matchId);
+      const messagesData = await AsyncStorage.getItem(key);
+      return safelyParseJSON(messagesData, []);
+    } catch (error) {
+      attempt++;
       
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          resolve(getMessages(matchId, attempt + 1));
-        }, delay);
-      });
-    }
-    
-    // If all retries fail, return empty array and log a more severe error
-    handleStorageError(
-      `All ${MAX_RETRIES} attempts to get messages failed`, 
-      { 
-        severity: ERROR_SEVERITY.ERROR,
-        showAlert: attempt === MAX_RETRIES, // Only show alert on final failure
-        alertMessage: 'Unable to load messages. Please try again later.'
+      handleStorageError(
+        error, 
+        { 
+          severity: ERROR_SEVERITY.WARNING,
+          silent: true,
+          alertMessage: `Failed to get messages (attempt ${attempt}/${MAX_RETRIES})`
+        }
+      );
+      
+      // If we've reached max retries, break out of the loop
+      if (attempt > MAX_RETRIES) {
+        break;
       }
-    );
-    return [];
+      
+      // Wait before retrying
+      const delay = getRetryDelay(attempt - 1);
+      console.log(`Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  
+  // If all retries fail, return empty array and log a more severe error
+  handleStorageError(
+    `All ${MAX_RETRIES} attempts to get messages failed`, 
+    { 
+      severity: ERROR_SEVERITY.ERROR,
+      showAlert: true,
+      alertMessage: 'Unable to load messages. Please try again later.'
+    }
+  );
+  return [];
 };
 
 /**
@@ -118,50 +122,54 @@ export const getMessages = async (matchId, attempt = 0) => {
  * @param {number} attempt - Current attempt number (for internal use in recursion)
  * @returns {Promise<boolean>} True if successful, false otherwise
  */
-export const saveMessages = async (matchId, messages, attempt = 0) => {
-  try {
-    // Ensure we don't exceed the maximum number of stored messages
-    const messagesToStore = messages.length > MAX_STORED_MESSAGES 
-      ? messages.slice(messages.length - MAX_STORED_MESSAGES) 
-      : messages;
-    
-    const key = STORAGE_KEYS.MESSAGES(matchId);
-    await AsyncStorage.setItem(key, JSON.stringify(messagesToStore));
-    return true;
-  } catch (error) {
-    handleStorageError(
-      error, 
-      { 
-        severity: ERROR_SEVERITY.WARNING,
-        silent: true,
-        alertMessage: `Failed to save messages (attempt ${attempt + 1})`
-      }
-    );
-    
-    // Implement retry logic
-    if (attempt < MAX_RETRIES) {
-      const delay = getRetryDelay(attempt);
-      console.log(`Retrying in ${delay}ms...`);
+export const saveMessages = async (matchId, messages) => {
+  let attempt = 0;
+  
+  while (attempt <= MAX_RETRIES) {
+    try {
+      // Ensure we don't exceed the maximum number of stored messages
+      const messagesToStore = messages.length > MAX_STORED_MESSAGES 
+        ? messages.slice(messages.length - MAX_STORED_MESSAGES) 
+        : messages;
       
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          resolve(saveMessages(matchId, messages, attempt + 1));
-        }, delay);
-      });
-    }
-    
-    // If all retries fail, return false and log a more severe error
-    handleStorageError(
-      `All ${MAX_RETRIES} attempts to save messages failed`, 
-      { 
-        severity: ERROR_SEVERITY.ERROR,
-        // Only show alert on final failure and only if there are messages to save
-        showAlert: attempt === MAX_RETRIES && messages.length > 0,
-        alertMessage: 'Unable to save messages. Your messages will be available until you close the app.'
+      const key = STORAGE_KEYS.MESSAGES(matchId);
+      await AsyncStorage.setItem(key, JSON.stringify(messagesToStore));
+      return true;
+    } catch (error) {
+      attempt++;
+      
+      handleStorageError(
+        error, 
+        { 
+          severity: ERROR_SEVERITY.WARNING,
+          silent: true,
+          alertMessage: `Failed to save messages (attempt ${attempt}/${MAX_RETRIES})`
+        }
+      );
+      
+      // If we've reached max retries, break out of the loop
+      if (attempt > MAX_RETRIES) {
+        break;
       }
-    );
-    return false;
+      
+      // Wait before retrying
+      const delay = getRetryDelay(attempt - 1);
+      console.log(`Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  
+  // If all retries fail, return false and log a more severe error
+  handleStorageError(
+    `All ${MAX_RETRIES} attempts to save messages failed`, 
+    { 
+      severity: ERROR_SEVERITY.ERROR,
+      // Only show alert if there are messages to save
+      showAlert: messages.length > 0,
+      alertMessage: 'Unable to save messages. Your messages will be available until you close the app.'
+    }
+  );
+  return false;
 };
 
 /**

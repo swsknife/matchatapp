@@ -181,8 +181,10 @@ const initializeSocketSingleton = async () => {
       console.error("Failed to reconnect after all automatic attempts");
       store.dispatch(setConnectionStatus('reconnect_failed'));
       
-      // Start manual reconnection process
-      if (manualReconnectAttempts < MAX_MANUAL_RECONNECT_ATTEMPTS) {
+      // Start manual reconnection process only if we haven't already started it
+      // from the connect_error handler to avoid duplicate reconnection attempts
+      if (manualReconnectAttempts < MAX_MANUAL_RECONNECT_ATTEMPTS && 
+          !(socketInstance.io && socketInstance.io._reconnectionAttempts >= socketInstance.io._opts.reconnectionAttempts)) {
         const delay = Math.min(
           30000, // Max 30 seconds
           1000 * Math.pow(2, manualReconnectAttempts) // Exponential backoff
@@ -213,6 +215,10 @@ export const initializeSocket = (timeoutMs = 15000) => {
       // Force a clean socket instance by disconnecting any existing one
       if (socketInstance) {
         console.log("Disconnecting existing socket before initialization");
+        // Remove any existing listeners to prevent memory leaks
+        socketInstance.removeAllListeners('connect');
+        socketInstance.removeAllListeners('connect_error');
+        socketInstance.removeAllListeners('disconnect');
         socketInstance.disconnect();
         socketInstance = null;
       }
@@ -237,6 +243,48 @@ export const initializeSocket = (timeoutMs = 15000) => {
       // Set status to reconnecting while we wait
       store.dispatch(setConnectionStatus('reconnecting'));
       
+      // Define handlers
+      const connectHandler = () => {
+        clearTimeout(timeoutId);
+        // Remove all temporary event listeners to prevent memory leaks
+        socket.off('connect', connectHandler);
+        socket.off('connect_error', errorHandler);
+        socket.off('disconnect', disconnectHandler);
+        
+        console.log("Socket connected in initializeSocket promise");
+        store.dispatch(setConnectionStatus('connected'));
+        resolve(socket);
+      };
+      
+      const errorHandler = (error) => {
+        clearTimeout(timeoutId);
+        // Remove all temporary event listeners to prevent memory leaks
+        socket.off('connect', connectHandler);
+        socket.off('connect_error', errorHandler);
+        socket.off('disconnect', disconnectHandler);
+        
+        console.error("Socket connection error in initializeSocket promise:", error);
+        store.dispatch(setConnectionStatus('disconnected'));
+        reject(error);
+      };
+      
+      const disconnectHandler = (reason) => {
+        clearTimeout(timeoutId);
+        // Remove all temporary event listeners to prevent memory leaks
+        socket.off('connect', connectHandler);
+        socket.off('connect_error', errorHandler);
+        socket.off('disconnect', disconnectHandler);
+        
+        console.error("Socket disconnected during initialization:", reason);
+        store.dispatch(setConnectionStatus('disconnected'));
+        reject(new Error(`Socket disconnected during initialization: ${reason}`));
+      };
+      
+      // Set up event listeners - using once() to ensure they're automatically removed after firing
+      socket.once('connect', connectHandler);
+      socket.once('connect_error', errorHandler);
+      socket.once('disconnect', disconnectHandler);
+      
       // Set up a timeout to reject the promise if connection takes too long
       const timeoutId = setTimeout(() => {
         // Remove the event listeners to prevent memory leaks
@@ -249,33 +297,6 @@ export const initializeSocket = (timeoutMs = 15000) => {
         console.error(timeoutError);
         reject(timeoutError);
       }, timeoutMs);
-      
-      // Define handlers
-      const connectHandler = () => {
-        clearTimeout(timeoutId);
-        console.log("Socket connected in initializeSocket promise");
-        store.dispatch(setConnectionStatus('connected'));
-        resolve(socket);
-      };
-      
-      const errorHandler = (error) => {
-        clearTimeout(timeoutId);
-        console.error("Socket connection error in initializeSocket promise:", error);
-        store.dispatch(setConnectionStatus('disconnected'));
-        reject(error);
-      };
-      
-      const disconnectHandler = (reason) => {
-        clearTimeout(timeoutId);
-        console.error("Socket disconnected during initialization:", reason);
-        store.dispatch(setConnectionStatus('disconnected'));
-        reject(new Error(`Socket disconnected during initialization: ${reason}`));
-      };
-      
-      // Set up event listeners
-      socket.once('connect', connectHandler);
-      socket.once('connect_error', errorHandler);
-      socket.once('disconnect', disconnectHandler);
       
       // Always try to connect explicitly
       console.log("Explicitly connecting socket...");

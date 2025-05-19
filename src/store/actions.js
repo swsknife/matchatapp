@@ -144,29 +144,46 @@ export const addMessage = (matchId, message) => async (dispatch) => {
   });
   
   // Then persist to storage using the centralized storage service
-  try {
-    // Use the storage service to add the message
-    const result = await storeMessage(matchId, message);
-    
-    if (!result.success) {
-      throw new Error(result.error || 'Unknown error saving message');
-    }
-  } catch (error) {
-    console.error('Failed to save message to storage:', error);
-    
-    // Dispatch an internal action to track persistence failures
-    dispatch({
-      type: PERSISTENCE_ERROR,
-      payload: { 
-        matchId, 
-        messageId: message.id,
-        error: error.message 
+  // with retry mechanism
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  let success = false;
+  
+  while (retryCount < MAX_RETRIES && !success) {
+    try {
+      // Use the storage service to add the message
+      const result = await storeMessage(matchId, message);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Unknown error saving message');
       }
-    });
-    
-    // Continue execution - the message is already in Redux state
-    // We just couldn't persist it to storage
+      
+      success = true;
+    } catch (error) {
+      retryCount++;
+      console.error(`Failed to save message to storage (attempt ${retryCount}/${MAX_RETRIES}):`, error);
+      
+      if (retryCount < MAX_RETRIES) {
+        // Wait before retrying with exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        // All retries failed, dispatch persistence error
+        dispatch({
+          type: PERSISTENCE_ERROR,
+          payload: { 
+            matchId, 
+            messageId: message.id,
+            error: error.message,
+            retryCount
+          }
+        });
+      }
+    }
   }
+  
+  // Return success status for components that need to know if persistence succeeded
+  return success;
 };
 
 /**
@@ -199,27 +216,63 @@ export const updateMessageStatus = (matchId, messageId, status) => async (dispat
     payload: { matchId, messageId, status },
   });
   
-  // Then persist the updated messages to storage
-  try {
-    // Get the current messages for this match
-    const messages = getState().messages[matchId] || [];
-    
-    // Only persist if we have messages
-    if (messages.length > 0) {
-      // Save the updated messages to storage
-      await saveMessages(matchId, messages);
-    }
-  } catch (error) {
-    console.error('Failed to persist message status update:', error);
-    
-    // Dispatch an internal action to track persistence failures
-    dispatch({
-      type: PERSISTENCE_ERROR,
-      payload: { 
-        matchId, 
-        messageId,
-        error: error.message 
+  // Then persist the updated messages to storage with retry mechanism
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  let success = false;
+  
+  while (retryCount < MAX_RETRIES && !success) {
+    try {
+      // Get the current messages for this match
+      const messages = getState().messages[matchId] || [];
+      
+      // Only persist if we have messages
+      if (messages.length > 0) {
+        // Save the updated messages to storage
+        await saveMessages(matchId, messages);
+        success = true;
+      } else {
+        // No messages to save, consider it a success
+        success = true;
       }
-    });
+    } catch (error) {
+      retryCount++;
+      console.error(`Failed to persist message status update (attempt ${retryCount}/${MAX_RETRIES}):`, error);
+      
+      if (retryCount < MAX_RETRIES) {
+        // Wait before retrying with exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        // All retries failed, dispatch persistence error
+        dispatch({
+          type: PERSISTENCE_ERROR,
+          payload: { 
+            matchId, 
+            messageId,
+            error: error.message,
+            retryCount
+          }
+        });
+        
+        // Schedule a reconciliation attempt for later
+        setTimeout(() => {
+          // Get the latest state
+          const currentState = getState();
+          const currentMessages = currentState.messages[matchId] || [];
+          
+          // If we still have messages, try one more time
+          if (currentMessages.length > 0) {
+            console.log(`Attempting message status reconciliation for match ${matchId}`);
+            saveMessages(matchId, currentMessages)
+              .then(() => console.log(`Successfully reconciled message status for match ${matchId}`))
+              .catch(err => console.error(`Failed final reconciliation attempt:`, err));
+          }
+        }, 30000); // Try again after 30 seconds
+      }
+    }
   }
+  
+  // Return success status for components that need to know if persistence succeeded
+  return success;
 };
