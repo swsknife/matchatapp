@@ -16,27 +16,35 @@ const Stack = createStackNavigator();
 const AppContent = () => {
   // Initialize services when app loads
   useEffect(() => {
-    // Start cleanup process - run once per day, keep messages for 30 days
-    startPeriodicCleanup(24 * 60 * 60 * 1000, 30);
-    
-    // Initialize remote logger
-    const cleanupLogger = remoteLogger.initRemoteLogger();
-    
-    // Initialize session manager
-    initializeSessionManager();
-    
-    // Log app start
-    remoteLogger.log('Application started', {
-      timestamp: new Date().toISOString(),
-      version: '0.0.1' // Replace with your app version
-    });
-    
-    // Clean up when component unmounts
-    return () => {
-      stopPeriodicCleanup();
-      if (cleanupLogger) cleanupLogger();
-      cleanupSessionManager();
-    };
+    try {
+      // Start cleanup process - run once per day, keep messages for 30 days
+      startPeriodicCleanup(24 * 60 * 60 * 1000, 30);
+      
+      // Initialize remote logger
+      const cleanupLogger = remoteLogger.initRemoteLogger();
+      
+      // Initialize session manager
+      initializeSessionManager();
+      
+      // Log app start
+      remoteLogger.log('Application started', {
+        timestamp: new Date().toISOString(),
+        version: '0.0.1' // Replace with your app version
+      });
+      
+      // Clean up when component unmounts
+      return () => {
+        try {
+          stopPeriodicCleanup();
+          if (cleanupLogger) cleanupLogger();
+          cleanupSessionManager();
+        } catch (cleanupError) {
+          console.error('Error during cleanup:', cleanupError);
+        }
+      };
+    } catch (error) {
+      console.error('Error initializing app services:', error);
+    }
   }, []);
   
   return (

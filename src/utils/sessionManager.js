@@ -33,8 +33,8 @@ let appState = 'active';
  * Sets up event listeners and timers
  */
 export const initializeSessionManager = () => {
-  // Set up app state change listener
-  AppState.addEventListener('change', handleAppStateChange);
+  // Set up app state change listener - using the newer API
+  appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
   
   // Start inactivity timer
   resetInactivityTimer();
@@ -291,9 +291,15 @@ export const logoutUser = async (reason = 'manual') => {
 /**
  * Clean up resources when the app is closed
  */
+// Store the AppState subscription
+let appStateSubscription = null;
+
 export const cleanupSessionManager = () => {
-  // Remove app state listener
-  AppState.removeEventListener('change', handleAppStateChange);
+  // Remove app state listener using the subscription
+  if (appStateSubscription) {
+    appStateSubscription.remove();
+    appStateSubscription = null;
+  }
   
   // Clear timers
   if (inactivityTimer) {
