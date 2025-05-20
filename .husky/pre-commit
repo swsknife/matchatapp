@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged to lint and format staged files
+npx lint-staged
+
+# Run tests on affected files
+npm test -- --findRelatedTests $(git diff --cached --name-only | grep -E '\.jsx?$' | tr '\n' ' ')
