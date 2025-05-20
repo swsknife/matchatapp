@@ -11,7 +11,7 @@ import { AppState, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import { disconnectSocket, getSocketInstance } from './network';
-import store from '../store/store';
+import store from '../store';
 import { setIsSearching, setCurrentMatch } from '../store/actions';
 import remoteLogger from './remoteLogger';
 
@@ -27,20 +27,55 @@ const LAST_ACTIVE_KEY = '@MatchChatApp:lastActive';
 let inactivityTimer = null;
 let backgroundTimer = null;
 let appState = 'active';
+// Store the AppState subscription
+let appStateSubscription = null;
 
 /**
  * Initialize the session manager
  * Sets up event listeners and timers
  */
 export const initializeSessionManager = () => {
-  // Set up app state change listener - using the newer API
-  appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
-  
-  // Start inactivity timer
-  resetInactivityTimer();
-  
-  // Log initialization
-  remoteLogger.log('Session manager initialized');
+  try {
+    // Clean up any existing subscription first to prevent duplicates
+    if (appStateSubscription) {
+      try {
+        appStateSubscription.remove();
+      } catch (cleanupError) {
+        console.error('Error cleaning up existing AppState subscription:', cleanupError);
+      }
+      appStateSubscription = null;
+    }
+    
+    // Set up app state change listener - using the newer API
+    appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+    
+    // Start inactivity timer
+    try {
+      resetInactivityTimer();
+    } catch (timerError) {
+      console.error('Error initializing inactivity timer:', timerError);
+      remoteLogger.logError(timerError, 'sessionManager.initializeSessionManager.timer');
+    }
+    
+    // Log initialization
+    remoteLogger.log('Session manager initialized');
+    
+    return true; // Indicate successful initialization
+  } catch (error) {
+    console.error('Error initializing session manager:', error);
+    remoteLogger.logError(error, 'sessionManager.initializeSessionManager');
+    
+    // Try to set up minimal functionality
+    try {
+      if (!appStateSubscription) {
+        appStateSubscription = AppState.addEventListener('change', handleAppStateChange);
+      }
+    } catch (fallbackError) {
+      console.error('Failed to set up fallback AppState listener:', fallbackError);
+    }
+    
+    return false; // Indicate initialization problems
+  }
 };
 
 /**
@@ -48,60 +83,87 @@ export const initializeSessionManager = () => {
  * @param {string} nextAppState - The new app state
  */
 const handleAppStateChange = (nextAppState) => {
-  remoteLogger.log('App state changed', { 
-    previousState: appState, 
-    nextState: nextAppState 
-  });
-  
-  // App is going to background
-  if (appState === 'active' && nextAppState.match(/inactive|background/)) {
-    // Record last active timestamp
-    updateLastActiveTimestamp();
+  try {
+    remoteLogger.log('App state changed', { 
+      previousState: appState, 
+      nextState: nextAppState 
+    });
     
-    // Clear any existing background timer before setting a new one
-    if (backgroundTimer) {
-      clearTimeout(backgroundTimer);
-      backgroundTimer = null;
-    }
-    
-    // Set up background timer to disconnect socket (but not cancel search)
-    backgroundTimer = setTimeout(() => {
-      const socket = getSocketInstance();
-      if (socket && socket.connected) {
-        remoteLogger.log('Disconnecting socket due to app being in background');
-        // Note: We're using socket.disconnect() directly, not disconnectSocket()
-        // This keeps the socket instance but disconnects from the server
-        socket.disconnect();
+    // App is going to background
+    if (appState === 'active' && nextAppState.match(/inactive|background/)) {
+      try {
+        // Record last active timestamp
+        updateLastActiveTimestamp().catch(error => {
+          remoteLogger.logError(error, 'sessionManager.handleAppStateChange.updateTimestamp');
+        });
+        
+        // Clear any existing background timer before setting a new one
+        if (backgroundTimer) {
+          clearTimeout(backgroundTimer);
+          backgroundTimer = null;
+        }
+        
+        // Set up background timer to disconnect socket (but not cancel search)
+        backgroundTimer = setTimeout(() => {
+          try {
+            const socket = getSocketInstance();
+            if (socket && socket.connected) {
+              remoteLogger.log('Disconnecting socket due to app being in background');
+              // Note: We're using socket.disconnect() directly, not disconnectSocket()
+              // This keeps the socket instance but disconnects from the server
+              socket.disconnect();
+            }
+            // Clear the timer reference after it's executed
+            backgroundTimer = null;
+          } catch (timerError) {
+            remoteLogger.logError(timerError, 'sessionManager.handleAppStateChange.backgroundTimer');
+            backgroundTimer = null;
+          }
+        }, BACKGROUND_SOCKET_TIMEOUT);
+      } catch (backgroundError) {
+        remoteLogger.logError(backgroundError, 'sessionManager.handleAppStateChange.background');
       }
-      // Clear the timer reference after it's executed
-      backgroundTimer = null;
-    }, BACKGROUND_SOCKET_TIMEOUT);
-  }
-  
-  // App is coming to foreground
-  if (appState.match(/inactive|background/) && nextAppState === 'active') {
-    // Clear background timer
-    if (backgroundTimer) {
-      clearTimeout(backgroundTimer);
-      backgroundTimer = null;
     }
     
-    // Check if we need to log out due to inactivity
-    checkInactivityLogout();
-    
-    // Reset inactivity timer
-    resetInactivityTimer();
-    
-    // Reconnect socket if it was disconnected
-    const socket = getSocketInstance();
-    if (socket && !socket.connected) {
-      remoteLogger.log('Reconnecting socket after app came to foreground');
-      socket.connect();
+    // App is coming to foreground
+    if (appState.match(/inactive|background/) && nextAppState === 'active') {
+      try {
+        // Clear background timer
+        if (backgroundTimer) {
+          clearTimeout(backgroundTimer);
+          backgroundTimer = null;
+        }
+        
+        // Check if we need to log out due to inactivity
+        checkInactivityLogout().catch(error => {
+          remoteLogger.logError(error, 'sessionManager.handleAppStateChange.checkInactivity');
+        });
+        
+        // Reset inactivity timer
+        resetInactivityTimer();
+        
+        // Reconnect socket if it was disconnected
+        try {
+          const socket = getSocketInstance();
+          if (socket && !socket.connected) {
+            remoteLogger.log('Reconnecting socket after app came to foreground');
+            socket.connect();
+          }
+        } catch (socketError) {
+          remoteLogger.logError(socketError, 'sessionManager.handleAppStateChange.socketReconnect');
+        }
+      } catch (foregroundError) {
+        remoteLogger.logError(foregroundError, 'sessionManager.handleAppStateChange.foreground');
+      }
     }
+    
+    // Update app state
+    appState = nextAppState;
+  } catch (error) {
+    remoteLogger.logError(error, 'sessionManager.handleAppStateChange');
+    // Ensure app state is still updated even if there's an error
+    appState = nextAppState;
   }
-  
-  // Update app state
-  appState = nextAppState;
 };
 
 /**
@@ -109,18 +171,29 @@ const handleAppStateChange = (nextAppState) => {
  * Called when user interacts with the app
  */
 export const resetInactivityTimer = () => {
-  // Clear existing timer
-  if (inactivityTimer) {
-    clearTimeout(inactivityTimer);
+  try {
+    // Clear existing timer
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+    
+    // Set new timer
+    inactivityTimer = setTimeout(() => {
+      try {
+        logoutUser('inactivity');
+      } catch (logoutError) {
+        remoteLogger.logError(logoutError, 'sessionManager.resetInactivityTimer.timeoutCallback');
+      }
+    }, INACTIVITY_TIMEOUT);
+    
+    // Update last active timestamp
+    updateLastActiveTimestamp().catch(error => {
+      remoteLogger.logError(error, 'sessionManager.resetInactivityTimer.updateTimestamp');
+    });
+  } catch (error) {
+    remoteLogger.logError(error, 'sessionManager.resetInactivityTimer');
   }
-  
-  // Set new timer
-  inactivityTimer = setTimeout(() => {
-    logoutUser('inactivity');
-  }, INACTIVITY_TIMEOUT);
-  
-  // Update last active timestamp
-  updateLastActiveTimestamp();
 };
 
 /**
@@ -140,13 +213,33 @@ const updateLastActiveTimestamp = async () => {
  */
 export const updateActivity = async () => {
   try {
-    // Simply update the last active timestamp
-    await updateLastActiveTimestamp();
+    // Try to update the last active timestamp
+    try {
+      await updateLastActiveTimestamp();
+    } catch (timestampError) {
+      // Log the error but continue with timer reset
+      remoteLogger.logError(timestampError, 'sessionManager.updateActivity.timestamp');
+      console.error('Failed to update activity timestamp:', timestampError);
+    }
     
-    // Reset the inactivity timer
-    resetInactivityTimer();
+    // Try to reset the inactivity timer
+    try {
+      resetInactivityTimer();
+    } catch (timerError) {
+      // Log the error
+      remoteLogger.logError(timerError, 'sessionManager.updateActivity.timer');
+      console.error('Failed to reset inactivity timer:', timerError);
+    }
+    
+    // Return true to indicate at least partial success
+    return true;
   } catch (error) {
+    // Log any other unexpected errors
     remoteLogger.logError(error, 'sessionManager.updateActivity');
+    console.error('Unexpected error in updateActivity:', error);
+    
+    // Return false to indicate failure
+    return false;
   }
 };
 
@@ -249,13 +342,22 @@ export const logoutUser = async (reason = 'manual') => {
       socket.removeAllListeners('error');
       socket.removeAllListeners('client_reconnected');
       
-      // Leave any rooms the socket might be in
-      if (socket.rooms) {
-        for (const room of Array.from(socket.rooms)) {
-          if (room !== socket.id) {
-            socket.leave(room);
+      // Client-side sockets don't have direct access to their rooms
+      // Instead, we'll emit a custom event to the server to leave all rooms
+      try {
+        if (socket && socket.connected) {
+          // Emit a custom event to the server to leave all rooms
+          socket.emit('leaveAllRooms');
+          
+          // For any known match rooms, explicitly leave them
+          const currentMatch = store.getState().currentMatch;
+          if (currentMatch && currentMatch.matchId) {
+            socket.emit('leaveMatch', { matchId: currentMatch.matchId });
           }
         }
+      } catch (roomError) {
+        // Log the error but continue with logout process
+        remoteLogger.logError(roomError, 'sessionManager.logoutUser.roomsError');
       }
     }
     
@@ -291,29 +393,31 @@ export const logoutUser = async (reason = 'manual') => {
 /**
  * Clean up resources when the app is closed
  */
-// Store the AppState subscription
-let appStateSubscription = null;
-
 export const cleanupSessionManager = () => {
-  // Remove app state listener using the subscription
-  if (appStateSubscription) {
-    appStateSubscription.remove();
-    appStateSubscription = null;
+  try {
+    // Remove app state listener using the subscription
+    if (appStateSubscription) {
+      appStateSubscription.remove();
+      appStateSubscription = null;
+    }
+    
+    // Clear timers
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+    
+    if (backgroundTimer) {
+      clearTimeout(backgroundTimer);
+      backgroundTimer = null;
+    }
+    
+    // Log cleanup
+    remoteLogger.log('Session manager cleaned up');
+  } catch (error) {
+    console.error('Error during session manager cleanup:', error);
+    remoteLogger.logError(error, 'sessionManager.cleanupSessionManager');
   }
-  
-  // Clear timers
-  if (inactivityTimer) {
-    clearTimeout(inactivityTimer);
-    inactivityTimer = null;
-  }
-  
-  if (backgroundTimer) {
-    clearTimeout(backgroundTimer);
-    backgroundTimer = null;
-  }
-  
-  // Log cleanup
-  remoteLogger.log('Session manager cleaned up');
 };
 
 /**
@@ -321,8 +425,17 @@ export const cleanupSessionManager = () => {
  * @returns {Object} Timeout information in human-readable format
  */
 export const getSessionTimeouts = () => {
-  return {
-    inactivityTimeout: '8 hours',
-    backgroundSearchTimeout: '15 minutes'
-  };
+  try {
+    return {
+      inactivityTimeout: '8 hours',
+      backgroundSearchTimeout: '15 minutes'
+    };
+  } catch (error) {
+    // Provide default values in case of any error
+    console.error('Error getting session timeouts:', error);
+    return {
+      inactivityTimeout: 'a few hours',
+      backgroundSearchTimeout: 'a few minutes'
+    };
+  }
 };

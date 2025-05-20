@@ -134,14 +134,14 @@ function cleanupAbandonedSearchesAndMatches() {
   for (const socketId in activeSearches) {
     const search = activeSearches[socketId];
     if (now - search.timestamp > SEARCH_TIMEOUT) {
-      logger.info(`Cleaning up abandoned search for socket ${socketId}`);
+      console.log(`Cleaning up abandoned search for socket ${socketId}`);
       delete activeSearches[socketId];
       
       // Also remove from waiting rooms if present
       for (const roomId in waitingRooms) {
         if (waitingRooms[roomId].socketId === socketId) {
           delete waitingRooms[roomId];
-          logger.info(`Removed abandoned waiting room ${roomId}`);
+          console.log(`Removed abandoned waiting room ${roomId}`);
           
           // Also clean up the waiting room index
           for (const key in waitingRoomsByKey) {
@@ -167,7 +167,7 @@ function cleanupAbandonedSearchesAndMatches() {
     
     // Check if match has been inactive for too long
     if (now - match.timestamp > MATCH_TIMEOUT) {
-      logger.info(`Cleaning up inactive match ${matchId}`);
+      console.log(`Cleaning up inactive match ${matchId}`);
       
       // Notify any connected players that the match has ended
       io.to(matchId).emit('matchEnded', {
@@ -180,7 +180,7 @@ function cleanupAbandonedSearchesAndMatches() {
     }
   }
   
-  logger.info('Cleanup complete', {
+  console.log('Cleanup complete', {
     activeSearches: Object.keys(activeSearches).length,
     waitingRooms: Object.keys(waitingRooms).length,
     activeMatches: Object.keys(activeMatches).length
@@ -234,12 +234,20 @@ function safeSocketHandler(handler) {
       }
       
       // Log to server logs for monitoring
-      logger.error('Socket handler error', {
-        socketId: this.id,
-        error: error.message,
-        stack: error.stack,
-        code: errorCode
-      });
+      if (typeof logger !== 'undefined' && logger.error) {
+        logger.error('Socket handler error', {
+          socketId: this.id,
+          error: error.message,
+          stack: error.stack,
+          code: errorCode
+        });
+      } else {
+        console.error('Socket handler error', {
+          socketId: this.id,
+          error: error.message,
+          code: errorCode
+        });
+      }
     }
   };
 }

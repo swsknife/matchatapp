@@ -75,47 +75,29 @@ const HomeScreen = ({ navigation }) => {
    * Load user ID
    */
   useEffect(() => {
-    const loadUserIdAndConnect = async () => {
+    const loadUserId = async () => {
       try {
         // Load or generate user ID
         const id = await getUserId();
         setUserId(id);
         
         // Update activity timestamp
-        await updateActivity();
+        try {
+          await updateActivity();
+        } catch (activityError) {
+          console.error('Failed to update activity timestamp:', activityError);
+          // Continue execution - this is not critical
+        }
         
         // Log initialization
         remoteLogger.log('HomeScreen initialized with user ID', { userId: id });
-        
-        // Initialize socket connection
-        console.log('Initializing socket connection on HomeScreen mount');
-        try {
-          await initializeSocket(20000);
-          console.log('Socket connection established successfully');
-        } catch (error) {
-          console.error('Failed to initialize socket on mount:', error);
-          remoteLogger.logError(error, 'HomeScreen.initializeSocket');
-          Alert.alert(
-            'Connection Error',
-            'Failed to connect to the server. Some features may not work properly.',
-            [
-              {
-                text: 'Retry',
-                onPress: () => initializeSocket(20000)
-                  .then(() => console.log('Reconnection successful'))
-                  .catch(err => console.error('Reconnection failed:', err))
-              },
-              { text: 'OK' }
-            ]
-          );
-        }
       } catch (error) {
         console.error('Failed to load user ID:', error);
         remoteLogger.logError(error, 'HomeScreen.loadUserId');
       }
     };
     
-    loadUserIdAndConnect();
+    loadUserId();
   }, []);
 
   /**
@@ -127,8 +109,13 @@ const HomeScreen = ({ navigation }) => {
     if (!userId) return;
     
     let isMounted = true;
+    let socketInitialized = false;
 
     const setupSocketAndListeners = async () => {
+      // Prevent multiple initialization attempts
+      if (socketInitialized) return;
+      socketInitialized = true;
+      
       try {
         console.log("🔍 Initializing socket on HomeScreen");
         
@@ -136,15 +123,19 @@ const HomeScreen = ({ navigation }) => {
         resetInactivityTimer();
         
         // Try to initialize socket with a timeout of 20 seconds
-        await initializeSocket(20000).catch(error => {
+        try {
+          await initializeSocket(20000);
+        } catch (error) {
           console.error("Failed to initialize socket:", error);
+          socketInitialized = false; // Reset flag to allow retry
           throw new Error(`Socket connection failed: ${error.message}`);
-        });
+        }
         
         const socket = getSocketInstance();
-
+        
         if (!socket) {
           console.error("Socket initialization failed - no socket instance returned");
+          socketInitialized = false; // Reset flag to allow retry
           if (isMounted) {
             Alert.alert(
               'Connection Error', 
@@ -207,6 +198,7 @@ const HomeScreen = ({ navigation }) => {
           // Update state
           dispatch(setLoading(false));
           setCountdown(0); // Reset counter to 0
+          setLastCountdownUpdate(Date.now());
           dispatch(setIsSearching(false));
           dispatch(setCurrentMatch(matchData));
           
@@ -279,6 +271,7 @@ const HomeScreen = ({ navigation }) => {
             dispatch(setLoading(false));
             dispatch(setIsSearching(false));
             setCountdown(0); // Reset counter to 0
+            setLastCountdownUpdate(Date.now());
           }
         };
         
@@ -318,6 +311,7 @@ const HomeScreen = ({ navigation }) => {
             dispatch(setLoading(false));
             dispatch(setIsSearching(false));
             setCountdown(0); // Reset counter to 0
+            setLastCountdownUpdate(Date.now());
           }
         };
 
@@ -360,7 +354,10 @@ const HomeScreen = ({ navigation }) => {
           dispatch(setLoading(false));
           dispatch(setIsSearching(false));
         }
-        return () => {};
+        // Return a no-op cleanup function to prevent errors
+        return () => {
+          console.log('No socket listeners to clean up due to initialization error');
+        };
       }
     };
 
@@ -381,9 +378,15 @@ const HomeScreen = ({ navigation }) => {
   useEffect(() => {
     // Reset inactivity timer when user interacts with the app
     if (isSearching || currentMatch) {
-      updateActivity();
+      try {
+        updateActivity().catch(error => {
+          console.error('Failed to update activity timestamp:', error);
+        });
+      } catch (error) {
+        console.error('Failed to update activity timestamp:', error);
+      }
     }
-  }, [isSearching, currentMatch]);
+  }, [isSearching, currentMatch, updateActivity]);
 
   /**
    * Timer effect to track search duration
@@ -398,6 +401,7 @@ const HomeScreen = ({ navigation }) => {
       // Reset the counter when starting a new search
       if (!timer) {
         setCountdown(0);
+        setLastCountdownUpdate(Date.now());
       }
 
       timer = setInterval(() => {
@@ -409,6 +413,7 @@ const HomeScreen = ({ navigation }) => {
     } else {
       // Reset countdown when not searching
       setCountdown(0);
+      setLastCountdownUpdate(Date.now());
     }
 
     return () => {
@@ -447,6 +452,7 @@ const HomeScreen = ({ navigation }) => {
         dispatch(setIsSearching(false));
         dispatch(setLoading(false));
         setCountdown(0);
+        setLastCountdownUpdate(Date.now());
         
         // Notify the user
         Alert.alert(
@@ -483,7 +489,13 @@ const HomeScreen = ({ navigation }) => {
     }
     
     // Update activity when starting a search
-    updateActivity();
+    try {
+      updateActivity().catch(error => {
+        console.error('Failed to update activity timestamp:', error);
+      });
+    } catch (error) {
+      console.error('Failed to update activity timestamp:', error);
+    }
 
     // Check connection status
     if (connectionStatus === 'disconnected') {
@@ -539,10 +551,17 @@ const HomeScreen = ({ navigation }) => {
     const performSearch = async () => {
       dispatch(setLoading(true));
       dispatch(setIsSearching(true));
-      // Countdown will be reset in the useEffect
+      // Explicitly reset countdown here to ensure it's reset immediately
+      setCountdown(0);
+      setLastCountdownUpdate(Date.now());
       
       // Update activity timestamp
-      await updateActivity();
+      try {
+        await updateActivity();
+      } catch (activityError) {
+        console.error('Failed to update activity timestamp:', activityError);
+        // Continue execution - this is not critical
+      }
 
       startSearch({ city, time, game, userId }, (response) => {
         if (response && response.error) {
@@ -634,9 +653,15 @@ const HomeScreen = ({ navigation }) => {
       // Always update local state immediately to ensure UI is responsive
       dispatch(setIsSearching(false));
       setCountdown(0);
+      setLastCountdownUpdate(Date.now());
       
       // Update activity timestamp
-      await updateActivity();
+      try {
+        await updateActivity();
+      } catch (activityError) {
+        console.error('Failed to update activity timestamp:', activityError);
+        // Continue execution - this is not critical
+      }
       
       // Show loading indicator while canceling
       dispatch(setLoading(true));

@@ -17,7 +17,22 @@ import {
 import { getSessionTimeouts } from '../utils/sessionManager';
 
 const SessionInfoModal = ({ visible, onClose }) => {
-  const timeouts = getSessionTimeouts();
+  // Add useState to handle potential errors
+  const [timeouts, setTimeouts] = React.useState({
+    inactivityTimeout: 'a few hours',
+    backgroundSearchTimeout: 'a few minutes'
+  });
+  
+  // Use useEffect to safely get timeouts
+  React.useEffect(() => {
+    try {
+      const sessionTimeouts = getSessionTimeouts();
+      setTimeouts(sessionTimeouts);
+    } catch (error) {
+      console.error('Error getting session timeouts:', error);
+      // Default values are already set in useState
+    }
+  }, []);
   
   return (
     <Modal

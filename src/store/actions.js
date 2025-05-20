@@ -11,6 +11,7 @@ import {
   addMessage as storeMessage, 
   generateMessageId 
 } from '../services/storageService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ===== User Preference Actions =====
 
@@ -175,9 +176,34 @@ export const addMessage = (matchId, message) => async (dispatch) => {
             matchId, 
             messageId: message.id,
             error: error.message,
-            retryCount
+            retryCount,
+            timestamp: Date.now(),
+            pendingOperation: {
+              type: 'ADD_MESSAGE',
+              data: { matchId, message }
+            }
           }
         });
+        
+        // Store the failed operation in AsyncStorage for retry on app restart
+        try {
+          const PENDING_OPS_KEY = '@MatchChatApp:pendingOperations';
+          // Get existing pending operations
+          const existingOpsJson = await AsyncStorage.getItem(PENDING_OPS_KEY);
+          const existingOps = existingOpsJson ? JSON.parse(existingOpsJson) : [];
+          
+          // Add the new pending operation
+          existingOps.push({
+            type: 'ADD_MESSAGE',
+            data: { matchId, message },
+            timestamp: Date.now()
+          });
+          
+          // Store the updated list
+          await AsyncStorage.setItem(PENDING_OPS_KEY, JSON.stringify(existingOps));
+        } catch (storageError) {
+          console.error('Failed to store pending operation:', storageError);
+        }
       }
     }
   }
@@ -251,9 +277,34 @@ export const updateMessageStatus = (matchId, messageId, status) => async (dispat
             matchId, 
             messageId,
             error: error.message,
-            retryCount
+            retryCount,
+            timestamp: Date.now(),
+            pendingOperation: {
+              type: 'UPDATE_MESSAGE_STATUS',
+              data: { matchId, messageId, status }
+            }
           }
         });
+        
+        // Store the failed operation in AsyncStorage for retry on app restart
+        try {
+          const PENDING_OPS_KEY = '@MatchChatApp:pendingOperations';
+          // Get existing pending operations
+          const existingOpsJson = await AsyncStorage.getItem(PENDING_OPS_KEY);
+          const existingOps = existingOpsJson ? JSON.parse(existingOpsJson) : [];
+          
+          // Add the new pending operation
+          existingOps.push({
+            type: 'UPDATE_MESSAGE_STATUS',
+            data: { matchId, messageId, status },
+            timestamp: Date.now()
+          });
+          
+          // Store the updated list
+          await AsyncStorage.setItem(PENDING_OPS_KEY, JSON.stringify(existingOps));
+        } catch (storageError) {
+          console.error('Failed to store pending operation:', storageError);
+        }
         
         // Schedule a reconciliation attempt for later
         setTimeout(() => {

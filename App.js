@@ -24,7 +24,12 @@ const AppContent = () => {
       const cleanupLogger = remoteLogger.initRemoteLogger();
       
       // Initialize session manager
-      initializeSessionManager();
+      try {
+        initializeSessionManager();
+      } catch (sessionError) {
+        console.error('Failed to initialize session manager:', sessionError);
+        // Continue app initialization - we'll try to recover
+      }
       
       // Log app start
       remoteLogger.log('Application started', {
@@ -35,9 +40,23 @@ const AppContent = () => {
       // Clean up when component unmounts
       return () => {
         try {
-          stopPeriodicCleanup();
-          if (cleanupLogger) cleanupLogger();
-          cleanupSessionManager();
+          try {
+            stopPeriodicCleanup();
+          } catch (cleanupError) {
+            console.error('Error stopping periodic cleanup:', cleanupError);
+          }
+          
+          try {
+            if (cleanupLogger) cleanupLogger();
+          } catch (loggerError) {
+            console.error('Error cleaning up logger:', loggerError);
+          }
+          
+          try {
+            cleanupSessionManager();
+          } catch (sessionError) {
+            console.error('Error cleaning up session manager:', sessionError);
+          }
         } catch (cleanupError) {
           console.error('Error during cleanup:', cleanupError);
         }

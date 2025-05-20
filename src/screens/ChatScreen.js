@@ -23,6 +23,7 @@ import { getMessages, generateMessageId } from '../services/storageService';
 import { handleStorageError, handleNetworkError, ERROR_SEVERITY } from '../utils/errorHandling';
 import { useFocusEffect } from '@react-navigation/native';
 import remoteLogger from '../utils/remoteLogger';
+import { updateActivity, resetInactivityTimer } from '../utils/sessionManager';
 
 /**
  * ChatScreen Component
@@ -218,6 +219,33 @@ const ChatScreen = ({ route, navigation }) => {
 
     return () => backHandler.remove();
   }, [navigation, matchId, isMatchActive]);
+  
+  /**
+   * Update session activity periodically while on chat screen
+   */
+  useEffect(() => {
+    // Reset inactivity timer when entering chat screen
+    resetInactivityTimer();
+    
+    // Update activity timestamp when chat screen is focused
+    updateActivity().catch(error => {
+      console.error("Error updating initial session activity:", error);
+    });
+    
+    // Set up periodic activity updates while on chat screen
+    const activityInterval = setInterval(() => {
+      // Only update if the match is still active
+      if (isMatchActive) {
+        updateActivity().catch(error => {
+          console.error("Error updating periodic session activity:", error);
+        });
+      }
+    }, 60000); // Update every minute
+    
+    return () => {
+      clearInterval(activityInterval);
+    };
+  }, [isMatchActive]);
 
   /**
    * Main socket setup effect
@@ -236,10 +264,12 @@ const ChatScreen = ({ route, navigation }) => {
     const setupSocket = async () => {
       try {
         // Initialize socket with a timeout of 20 seconds
-        await initializeSocket(20000).catch(error => {
+        try {
+          await initializeSocket(20000);
+        } catch (error) {
           console.error("Failed to initialize socket in ChatScreen:", error);
           throw new Error(`Socket connection failed: ${error.message}`);
-        });
+        }
         
         const socket = getSocketInstance();
         
@@ -811,6 +841,16 @@ const ChatScreen = ({ route, navigation }) => {
     if (!isMatchActive) {
       Alert.alert('Match Ended', 'You cannot send messages in an ended match.');
       return;
+    }
+    
+    // Update activity timestamp when sending a message
+    try {
+      updateActivity().catch(error => {
+        console.error("Error updating session activity:", error);
+      });
+      resetInactivityTimer();
+    } catch (sessionError) {
+      console.error("Error updating session activity:", sessionError);
     }
     
     // Create message object with UUID instead of timestamp for ID
