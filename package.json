@@ -11,10 +11,8 @@
     "start:user1": "react-native start --port 8081",
     "start:user2": "react-native start --port 8082",
     "ios": "react-native run-ios",
-    "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest",
-    "prepare": "husky"
+    "test": "jest"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",
@@ -45,7 +43,6 @@
     "@babel/preset-env": "^7.20.0",
     "@babel/runtime": "^7.20.0",
     "@react-native/babel-preset": "0.74.83",
-    "@react-native/eslint-config": "0.74.83",
     "@react-native/metro-config": "0.74.83",
     "@react-native/typescript-config": "0.74.83",
     "@testing-library/jest-native": "^5.4.3",
@@ -53,11 +50,7 @@
     "@types/react": "^18.2.6",
     "@types/react-test-renderer": "^18.0.0",
     "babel-jest": "^29.6.3",
-    "eslint": "^8.19.0",
-    "husky": "^9.1.7",
     "jest": "^29.6.3",
-    "lint-staged": "^16.0.0",
-    "prettier": "2.8.8",
     "react-test-renderer": "18.2.0",
     "redux-mock-store": "^1.5.5",
     "redux-thunk": "^2.4.2",
