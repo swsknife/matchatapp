@@ -5,10 +5,10 @@
  * It handles user preferences, match searching, and navigation to active matches.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ActivityIndicator, Alert, TouchableOpacity, Button,
-  Image, Platform
+  Image, Platform, AppState
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { REACT_APP_SERVER_URL } from '@env';
@@ -68,6 +68,7 @@ const HomeScreen = ({ navigation }) => {
   // Local state
   const [userId, setUserId] = useState(null); // Will be loaded from session manager
   const [countdown, setCountdown] = useState(0); // Counter for search duration
+  const [searchStartTime, setSearchStartTime] = useState(null); // When the search started (timestamp)
   const [lastCountdownUpdate, setLastCountdownUpdate] = useState(Date.now()); // Track when countdown was last updated
   const [serverStatus, setServerStatus] = useState('unknown'); // Server connection status
 
@@ -101,6 +102,84 @@ const HomeScreen = ({ navigation }) => {
   }, []);
 
   /**
+   * Memoized event handlers to prevent unnecessary re-creation
+   */
+  const handleMatchFound = useCallback((matchData) => {
+    console.log('Match found:', matchData);
+    
+    // Validate match data before proceeding
+    if (!matchData || !matchData.matchId) {
+      console.error('Invalid match data received:', matchData);
+      Alert.alert('Error', 'Received invalid match data from server.');
+      dispatch(setLoading(false));
+      dispatch(setIsSearching(false));
+      setCountdown(0);
+      return;
+    }
+    
+    // Update state
+    dispatch(setLoading(false));
+    setCountdown(0); // Reset counter to 0
+    setLastCountdownUpdate(Date.now());
+    dispatch(setIsSearching(false));
+    dispatch(setCurrentMatch(matchData));
+    
+    // Navigate to chat screen
+    try {
+      navigation.navigate('Chat', { ...matchData, userId });
+    } catch (error) {
+      console.error('Navigation error:', error);
+      Alert.alert(
+        'Navigation Error', 
+        'Failed to open chat screen. Please try accessing your match from the home screen.',
+        [{ text: 'OK' }]
+      );
+    }
+  }, [dispatch, navigation, userId]);
+
+  const handleConnectionError = useCallback((error) => {
+    console.error('Connection error:', error);
+    Alert.alert('Connection Error', 'Could not connect to the matchmaking server. Please check your internet connection.');
+    dispatch(setLoading(false));
+    dispatch(setIsSearching(false));
+  }, [dispatch]);
+
+  const handleDisconnect = useCallback((reason) => {
+    console.log('Socket disconnected. Reason:', reason);
+    
+    // Only show alert and cancel search if we're actively searching
+    if (isSearching) {
+      // Different messages based on disconnect reason
+      let message = 'You have been disconnected from the server. Your search has been canceled.';
+      
+      if (reason === 'io server disconnect') {
+        message = 'The server has closed the connection. Your search has been canceled.';
+      } else if (reason === 'transport close') {
+        message = 'Connection to server lost. Your search has been canceled.';
+      } else if (reason === 'ping timeout') {
+        message = 'Connection timed out. Your search has been canceled.';
+      }
+      
+      Alert.alert('Connection Lost', message);
+      dispatch(setLoading(false));
+      dispatch(setIsSearching(false));
+      setCountdown(0); // Reset counter to 0
+      setLastCountdownUpdate(Date.now());
+    }
+  }, [dispatch, isSearching]);
+
+  const handleSearchTimeout = useCallback((data) => {
+    console.log('Search timeout received:', data);
+    if (isSearching) {
+      Alert.alert('Search Timeout', data.message || 'Your search has timed out.');
+      dispatch(setLoading(false));
+      dispatch(setIsSearching(false));
+      setCountdown(0); // Reset counter to 0
+      setLastCountdownUpdate(Date.now());
+    }
+  }, [dispatch, isSearching]);
+
+  /**
    * Socket initialization and event listener setup
    * Handles socket connection, active matches, and various socket events
    */
@@ -110,6 +189,7 @@ const HomeScreen = ({ navigation }) => {
     
     let isMounted = true;
     let socketInitialized = false;
+    let retryTimeout = null;
 
     const setupSocketAndListeners = async () => {
       // Prevent multiple initialization attempts
@@ -117,37 +197,19 @@ const HomeScreen = ({ navigation }) => {
       socketInitialized = true;
       
       try {
-        console.log("🔍 Initializing socket on HomeScreen");
+        console.log("🔍 Setting up socket listeners on HomeScreen");
         
         // Reset inactivity timer when setting up socket
         resetInactivityTimer();
         
-        // Try to initialize socket with a timeout of 20 seconds
-        try {
-          await initializeSocket(20000);
-        } catch (error) {
-          console.error("Failed to initialize socket:", error);
-          socketInitialized = false; // Reset flag to allow retry
-          throw new Error(`Socket connection failed: ${error.message}`);
-        }
-        
+        // Get the socket instance (should already be initialized by App.js)
         const socket = getSocketInstance();
         
         if (!socket) {
-          console.error("Socket initialization failed - no socket instance returned");
+          console.warn("Socket not yet initialized by app startup, will retry...");
           socketInitialized = false; // Reset flag to allow retry
-          if (isMounted) {
-            Alert.alert(
-              'Connection Error', 
-              'Could not connect to the matchmaking server. Please check your internet connection and try again.',
-              [
-                { text: 'Retry', onPress: () => setupSocketAndListeners() },
-                { text: 'Cancel', style: 'cancel' }
-              ]
-            );
-            dispatch(setLoading(false));
-            dispatch(setIsSearching(false));
-          }
+          // Try again after a short delay
+          retryTimeout = setTimeout(() => setupSocketAndListeners(), 2000);
           return () => {};
         }
 
@@ -300,21 +362,7 @@ const HomeScreen = ({ navigation }) => {
         socket.on('reconnect', handleReconnect);
 
         // Register handlers using utility functions and get cleanup functions
-        /**
-         * Event handler for search timeout
-         * This is kept for backward compatibility with older server versions
-         */
-        const handleSearchTimeout = (data) => {
-          console.log('Search timeout received:', data);
-          if (isMounted && isSearching) {
-            Alert.alert('Search Timeout', data.message || 'Your search has timed out.');
-            dispatch(setLoading(false));
-            dispatch(setIsSearching(false));
-            setCountdown(0); // Reset counter to 0
-            setLastCountdownUpdate(Date.now());
-          }
-        };
-
+        // Use the memoized handlers defined outside this effect
         const cleanupMatchFound = onMatchFound(handleMatchFound);
         const cleanupConnectionError = onConnectionError(handleConnectionError);
         const cleanupDisconnect = onDisconnect(handleDisconnect);
@@ -368,8 +416,25 @@ const HomeScreen = ({ navigation }) => {
       if (typeof cleanup === 'function') {
         cleanup();
       }
+      // Clear any pending retry timeouts
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
     };
-  }, [dispatch, navigation, userId, currentMatch, isSearching]);
+  }, [dispatch, navigation, userId]);
+  
+  // Separate effect for handling match changes to prevent unnecessary socket re-initialization
+  useEffect(() => {
+    // This effect only handles updates when currentMatch or isSearching changes
+    // without re-initializing the socket connection
+    if (!userId) return;
+    
+    const socket = getSocketInstance();
+    if (socket) {
+      // Check for active matches when currentMatch changes
+      socket.emit('checkActiveMatches');
+    }
+  }, [currentMatch, isSearching]);
   
   /**
    * Reset inactivity timer on user interaction
@@ -389,8 +454,8 @@ const HomeScreen = ({ navigation }) => {
   }, [isSearching, currentMatch, updateActivity]);
 
   /**
-   * Timer effect to track search duration
-   * Shows how long the user has been searching without automatically timing out
+   * Timer effect to track search duration using timestamp-based calculation
+   * This approach works correctly even when app goes to background
    */
   useEffect(() => {
     let timer;
@@ -398,21 +463,33 @@ const HomeScreen = ({ navigation }) => {
     
     // Only run the timer when actively searching
     if (isSearching) {
-      // Reset the counter when starting a new search
-      if (!timer) {
+      // Set search start time when starting a new search
+      if (!searchStartTime) {
+        const startTime = Date.now();
+        setSearchStartTime(startTime);
         setCountdown(0);
-        setLastCountdownUpdate(Date.now());
+        setLastCountdownUpdate(startTime);
       }
 
-      timer = setInterval(() => {
-        if (isMounted) {
-          setCountdown((prevCountdown) => prevCountdown + 1);
-          setLastCountdownUpdate(Date.now());
+      // Update countdown based on elapsed time since search started
+      const updateCountdown = () => {
+        if (isMounted && searchStartTime) {
+          const now = Date.now();
+          const elapsedSeconds = Math.floor((now - searchStartTime) / 1000);
+          setCountdown(elapsedSeconds);
+          setLastCountdownUpdate(now);
         }
-      }, 1000);
+      };
+
+      // Update immediately
+      updateCountdown();
+
+      // Then update every second
+      timer = setInterval(updateCountdown, 1000);
     } else {
       // Reset countdown when not searching
       setCountdown(0);
+      setSearchStartTime(null);
       setLastCountdownUpdate(Date.now());
     }
 
@@ -422,16 +499,36 @@ const HomeScreen = ({ navigation }) => {
         clearInterval(timer);
       }
     };
-  }, [isSearching]);
+  }, [isSearching, searchStartTime]);
   
   /**
-   * Effect to handle app going to background
-   * Pauses the search timer when app is in background
+   * Effect to handle app going to background/foreground
+   * Recalculates countdown when app comes back to foreground
    */
+  // AppState change listener - separate from stuck state detection
   useEffect(() => {
-    // This would be the place to add app state listeners
-    // for handling app going to background/foreground
-    // if we were using AppState from react-native
+    const handleAppStateChange = (nextAppState) => {
+      if (nextAppState === 'active' && isSearching && searchStartTime) {
+        // App came back to foreground during search - recalculate countdown
+        const now = Date.now();
+        const elapsedSeconds = Math.floor((now - searchStartTime) / 1000);
+        setCountdown(elapsedSeconds);
+        setLastCountdownUpdate(now);
+        console.log(`App returned to foreground. Recalculated countdown: ${elapsedSeconds}s`);
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription?.remove();
+    };
+  }, [isSearching, searchStartTime]); // Only depend on isSearching and searchStartTime
+  
+  // Separate effect for stuck search state detection
+  useEffect(() => {
+    // Only set up the interval if we're actually searching
+    if (!isSearching) return;
     
     // Check for stuck search state
     const checkStuckSearchState = () => {
@@ -475,7 +572,7 @@ const HomeScreen = ({ navigation }) => {
       // Clean up interval
       clearInterval(stuckStateInterval);
     };
-  }, [isSearching, loading, countdown, lastCountdownUpdate]);
+  }, [isSearching, loading]); // Only depend on isSearching and loading states
 
   /**
    * Start searching for a match
@@ -551,9 +648,11 @@ const HomeScreen = ({ navigation }) => {
     const performSearch = async () => {
       dispatch(setLoading(true));
       dispatch(setIsSearching(true));
-      // Explicitly reset countdown here to ensure it's reset immediately
+      // Reset countdown and search start time
+      const startTime = Date.now();
       setCountdown(0);
-      setLastCountdownUpdate(Date.now());
+      setSearchStartTime(startTime);
+      setLastCountdownUpdate(startTime);
       
       // Update activity timestamp
       try {
@@ -650,8 +749,9 @@ const HomeScreen = ({ navigation }) => {
         connectionStatus
       });
       
-      // Always update local state immediately to ensure UI is responsive
+      // IMMEDIATELY update all UI state to be responsive
       dispatch(setIsSearching(false));
+      dispatch(setLoading(false)); // Don't show loading - update UI immediately
       setCountdown(0);
       setLastCountdownUpdate(Date.now());
       
@@ -663,42 +763,32 @@ const HomeScreen = ({ navigation }) => {
         // Continue execution - this is not critical
       }
       
-      // Show loading indicator while canceling
-      dispatch(setLoading(true));
-      
-      // Notify server about cancellation
+      // Notify server about cancellation (don't wait for response to update UI)
       const socket = getSocketInstance();
       if (socket && socket.connected) {
+        // First inform the user immediately
+        Alert.alert('Search Canceled', 'Your search has been canceled.');
+        
+        // Then notify the server in the background
         socket.emit('cancelSearch', { userId }, (response) => {
-          // Always update local state regardless of server response
-          dispatch(setLoading(false));
-          dispatch(setIsSearching(false));
-          setCountdown(0); // Reset counter to 0
-          
           if (response && response.error) {
             console.error('Error canceling search:', response.error);
             remoteLogger.logError(new Error(response.error), 'HomeScreen.cancelSearch');
-            // Still show success message to user since we've canceled locally
-            Alert.alert('Search Canceled', 'You have canceled the search, but there was an issue communicating with the server.');
+            // Don't show another alert since we already showed cancellation message
           } else {
             console.log('Search canceled successfully on server');
-            Alert.alert('Search Canceled', 'You have canceled the search.');
           }
         });
         
-        // Set a timeout in case the server doesn't respond
+        // Set a timeout in case the server doesn't respond - but don't show UI alert
         setTimeout(() => {
-          if (loading) {
+          if (socket.connected) {
             remoteLogger.log('Search cancel timeout reached', { countdown });
-            dispatch(setLoading(false));
-            Alert.alert('Search Canceled', 'You have canceled the search, but the server did not confirm the cancellation.');
+            console.log('Server did not confirm cancellation within timeout period');
           }
         }, 5000);
       } else {
-        // If socket is not connected, just update local state
-        dispatch(setLoading(false));
-        dispatch(setIsSearching(false));
-        setCountdown(0);
+        // If socket is not connected, inform the user
         Alert.alert('Search Canceled', 'You have canceled the search. The server could not be notified because you are disconnected.');
       }
     }
