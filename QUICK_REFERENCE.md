@@ -1,27 +1,38 @@
 # MatchChatApp - Quick Reference
 
-## 🚀 Current Working Setup (Metro + Render)
+## 🚀 **RECOMMENDED: Release APK Method (December 2024)**
+
+### Build & Test User1 (No Metro Required):
+```bash
+.\build-release-apk.bat
+adb install android/app/build/outputs/apk/user1/release/app-user1-release.apk
+```
+
+**Benefits:**
+- ✅ No Metro server needed
+- ✅ Production-like testing
+- ✅ No connection issues
+- ✅ Works on any device
+- ✅ ~6 minute build time
+
+## 🔧 Legacy Metro Method (Development Only)
 
 ### To Run User1:
-
 ```bash
 run-user1-simple.bat
 ```
 
 ### To Run User2:
-
 ```bash
 run-user2-simple.bat
 ```
 
-### To Run Both Users Simultaneously (for testing):
-
+### To Run Both Users Simultaneously:
 ```bash
 .\test-both-users.bat
 ```
 
-### If Issues:
-
+### If Metro Issues:
 ```bash
 diagnose-metro.bat
 fix-metro-connection.bat

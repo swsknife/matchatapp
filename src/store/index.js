@@ -6,13 +6,18 @@ import { configureStore } from '@reduxjs/toolkit';
 import { combineReducers } from 'redux';
 
 // Import reducers
-import cityReducer from './reducers/cityReducer';
-import timeReducer from './reducers/timeReducer';
-import gameReducer from './reducers/gameReducer';
-import messagesReducer from './reducers/messagesReducer';
-import connectionStatusReducer from './reducers/connectionStatusReducer';
-import matchReducer from './reducers/matchReducer';
-import searchReducer from './reducers/searchReducer';
+import {
+  cityReducer,
+  timeReducer,
+  gameReducer,
+  messagesReducer,
+  connectionStatusReducer,
+  currentMatchReducer,
+  isSearchingReducer,
+  loadingReducer,
+  countdownReducer,
+  persistenceErrorsReducer
+} from './reducers';
 
 // Combine reducers
 const rootReducer = combineReducers({
@@ -21,8 +26,11 @@ const rootReducer = combineReducers({
   game: gameReducer,
   messages: messagesReducer,
   connectionStatus: connectionStatusReducer,
-  currentMatch: matchReducer,
-  search: searchReducer,
+  currentMatch: currentMatchReducer,
+  isSearching: isSearchingReducer,
+  loading: loadingReducer,
+  countdown: countdownReducer,
+  persistenceErrors: persistenceErrorsReducer,
 });
 
 // Configure store

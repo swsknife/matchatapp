@@ -166,14 +166,25 @@ task runUser2Debug(type: Exec) {
 }
 
 // Task to uninstall both apps for clean testing
-task uninstallBothApps(type: Exec) {
+task uninstallUser1(type: Exec) {
     doFirst {
-        println "Uninstalling both app variants..."
+        println "Uninstalling User1 app..."
     }
     commandLine 'cmd', '/c', 'adb', 'uninstall', 'com.matchchatapp.user1'
-    finalizedBy {
-        exec {
-            commandLine 'cmd', '/c', 'adb', 'uninstall', 'com.matchchatapp.user2'
-        }
+    ignoreExitValue true
+}
+
+task uninstallUser2(type: Exec) {
+    doFirst {
+        println "Uninstalling User2 app..."
+    }
+    commandLine 'cmd', '/c', 'adb', 'uninstall', 'com.matchchatapp.user2'
+    ignoreExitValue true
+}
+
+task uninstallBothApps {
+    dependsOn uninstallUser1, uninstallUser2
+    doFirst {
+        println "Uninstalling both app variants..."
     }
 }

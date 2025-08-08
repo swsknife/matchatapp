@@ -29,6 +29,10 @@ import {
   getSessionTimeouts,
   resetInactivityTimer
 } from '../utils/sessionManager';
+import notificationService from '../services/notificationService';
+import ModernButton from '../components/modern/ModernButton';
+import ModernCard from '../components/modern/ModernCard';
+import { LinearGradient } from 'expo-linear-gradient';
 
   /**
    * Redux selector functions for accessing state
@@ -123,6 +127,10 @@ const HomeScreen = ({ navigation }) => {
     setLastCountdownUpdate(Date.now());
     dispatch(setIsSearching(false));
     dispatch(setCurrentMatch(matchData));
+    
+    // Send push notification for match found
+    const preferences = { city, game, time };
+    notificationService.notifyMatchFound(matchData.matchId, preferences);
     
     // Navigate to chat screen
     try {
@@ -795,51 +803,75 @@ const HomeScreen = ({ navigation }) => {
   };
 
   /**
-   * Main render method
+   * Main render method with modern UI
    */
   return (
-    <View style={styles.container}>
-      {/* Header with user ID and connection status */}
-      <View style={styles.headerContainer}>
-        <Text style={styles.userId}>User ID: {userId}</Text>
-        <View style={styles.connectionStatusContainer}>
-          <View style={[
-            styles.connectionIndicator,
-            { backgroundColor:
-              connectionStatus === 'connected' ? 'green' :
-              connectionStatus === 'reconnecting' ? 'orange' :
-              connectionStatus === 'reconnect_failed' ? 'red' : 'red'
-            }
-          ]} />
-          <Text style={styles.connectionStatusText}>
-            {connectionStatus === 'connected' ? 'Connected' :
-             connectionStatus === 'reconnecting' ? 'Reconnecting...' :
-             connectionStatus === 'reconnect_failed' ? 'Connection Failed' : 'Disconnected'}
+    <LinearGradient
+      colors={['#667eea', '#764ba2']}
+      style={styles.gradientBackground}
+    >
+      <View style={styles.container}>
+        {/* Header with user ID and connection status */}
+        <ModernCard
+          variant="glass"
+          padding="medium"
+          margin="small"
+          borderRadius="medium"
+          style={styles.headerCard}
+        >
+          <View style={styles.headerContainer}>
+            <Text style={styles.userId}>User ID: {userId}</Text>
+            <View style={styles.connectionStatusContainer}>
+              <View style={[
+                styles.connectionIndicator,
+                { backgroundColor:
+                  connectionStatus === 'connected' ? '#4ADE80' :
+                  connectionStatus === 'reconnecting' ? '#F59E0B' :
+                  connectionStatus === 'reconnect_failed' ? '#EF4444' : '#EF4444'
+                }
+              ]} />
+              <Text style={styles.connectionStatusText}>
+                {connectionStatus === 'connected' ? 'Connected' :
+                 connectionStatus === 'reconnecting' ? 'Reconnecting...' :
+                 connectionStatus === 'reconnect_failed' ? 'Connection Failed' : 'Disconnected'}
+              </Text>
+            </View>
+          </View>
+        </ModernCard>
+        
+        {/* Session rules banner */}
+        <ModernCard
+          variant="glass"
+          padding="small"
+          margin="small"
+          borderRadius="medium"
+          style={styles.sessionCard}
+        >
+          <Text style={styles.sessionRulesBannerText}>
+            Sessions expire after {getSessionTimeouts().inactivityTimeout} of inactivity
           </Text>
-        </View>
-      </View>
-      
-      {/* Session rules banner */}
-      <View style={styles.sessionRulesBanner}>
-        <Text style={styles.sessionRulesBannerText}>
-          Sessions expire after {getSessionTimeouts().inactivityTimeout} of inactivity
-        </Text>
-      </View>
-      
-      {/* Server connection test button */}
-      <TouchableOpacity
-        style={[styles.testButton, { backgroundColor: 
-          serverStatus === 'connected' ? 'green' : 
-          serverStatus === 'error' ? 'red' : 
-          serverStatus === 'testing' ? 'orange' : '#666'
-        }]}
-        onPress={() => {
-          // Prevent multiple simultaneous tests
-          if (serverStatus === 'testing') {
-            return;
+        </ModernCard>
+        
+        {/* Server connection test button */}
+        <ModernButton
+          title={
+            serverStatus === 'connected' ? 'Server Connected' : 
+            serverStatus === 'error' ? 'Server Error' : 
+            serverStatus === 'testing' ? 'Testing...' : 'Test Server'
           }
-          
-          setServerStatus('testing');
+          variant={
+            serverStatus === 'connected' ? 'secondary' : 
+            serverStatus === 'error' ? 'danger' : 
+            'outline'
+          }
+          loading={serverStatus === 'testing'}
+          onPress={() => {
+            // Prevent multiple simultaneous tests
+            if (serverStatus === 'testing') {
+              return;
+            }
+            
+            setServerStatus('testing');
           
           // Create an AbortController to handle timeouts
           const controller = new AbortController();
@@ -873,15 +905,24 @@ const HomeScreen = ({ navigation }) => {
                 `${errorMessage}\nPlease check your network connection and server status.`);
             });
         }}
-      >
-        <Text style={styles.testButtonText}>Test Server Connection</Text>
-      </TouchableOpacity>
+        />
 
-      {/* Active match buttons */}
-      {currentMatch && (
-        <TouchableOpacity
-          style={styles.matchButton}
-          onPress={() => {
+        {/* Active match buttons */}
+        {currentMatch && (
+          <ModernCard
+            variant="glass"
+            padding="medium"
+            margin="small"
+            borderRadius="medium"
+            style={styles.matchCard}
+          >
+            <ModernButton
+              title="Go to Match"
+              variant="primary"
+              size="large"
+              fullWidth
+              loading={loading}
+              onPress={() => {
             // Log the start of the Go to Match action
             remoteLogger.log('Go to Match button clicked', { 
               userId,
@@ -1056,159 +1097,200 @@ const HomeScreen = ({ navigation }) => {
                 [{ text: 'OK' }]
               );
             }
-          }}
-        >
-          <Text style={styles.matchButtonText}>Go to Match</Text>
-        </TouchableOpacity>
-      )}
-
-      {currentMatch && (
-        <TouchableOpacity
-          style={[styles.matchButton, { backgroundColor: 'red', marginTop: 8 }]}
-          onPress={() => {
-            Alert.alert(
-              'Leave Match',
-              'Are you sure you want to permanently leave this match?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Leave',
-                  style: 'destructive',
-                  onPress: async () => {
-                    try {
-                      dispatch(setLoading(true)); // Show loading indicator
-                      await leaveMatch(currentMatch.matchId, userId);
-                      // Reset navigation state after leaving
-                      resetNavigationState();
-                      dispatch(setCurrentMatch(null));
-                      dispatch(setLoading(false)); // Hide loading indicator
-                      Alert.alert('Success', 'You have left the match.');
-                    } catch (error) {
-                      console.error('Error leaving match:', error);
-                      dispatch(setLoading(false)); // Hide loading indicator
-                      Alert.alert('Error', 'Failed to leave the match. Please try again.');
+              }}
+            />
+            
+            <ModernButton
+              title="Leave Match"
+              variant="danger"
+              size="medium"
+              fullWidth
+              style={{ marginTop: 12 }}
+              onPress={() => {
+                Alert.alert(
+                  'Leave Match',
+                  'Are you sure you want to permanently leave this match?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Leave',
+                      style: 'destructive',
+                      onPress: async () => {
+                        try {
+                          dispatch(setLoading(true)); // Show loading indicator
+                          await leaveMatch(currentMatch.matchId, userId);
+                          // Reset navigation state after leaving
+                          resetNavigationState();
+                          dispatch(setCurrentMatch(null));
+                          dispatch(setLoading(false)); // Hide loading indicator
+                          
+                          // Send notification for match ended
+                          notificationService.notifyMatchEnded(currentMatch.matchId, 'You left the match');
+                          
+                          Alert.alert('Success', 'You have left the match.');
+                        } catch (error) {
+                          console.error('Error leaving match:', error);
+                          dispatch(setLoading(false)); // Hide loading indicator
+                          Alert.alert('Error', 'Failed to leave the match. Please try again.');
+                        }
+                      }
                     }
-                  }
-                }
-              ]
-            );
-          }}
+                  ]
+                );
+              }}
+            />
+          </ModernCard>
+        )}
+
+        {/* Preference selection */}
+        <ModernCard
+          variant="glass"
+          padding="medium"
+          margin="small"
+          borderRadius="medium"
+          style={styles.preferencesCard}
         >
-          <Text style={styles.matchButtonText}>Leave Match</Text>
-        </TouchableOpacity>
-      )}
+          <Text style={styles.sectionTitle}>Match Preferences</Text>
+          
+          <Text style={styles.label}>City</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={city}
+              onValueChange={(value) => dispatch(setCity(value))}
+              style={styles.picker}
+              enabled={!isSearching}
+              dropdownIconColor="#FFFFFF"
+            >
+              <Picker.Item label="Choose City" value="choose" />
+              <Picker.Item label="Riyadh" value="riyadh" />
+              <Picker.Item label="Jeddah" value="jeddah" />
+              <Picker.Item label="Khobar" value="khobar" />
+              <Picker.Item label="Dahran" value="dahran" />
+              <Picker.Item label="Dammam" value="dammam" />
+              <Picker.Item label="Madinah" value="madinah" />
+            </Picker>
+          </View>
 
-      {/* Preference selection pickers */}
-      <Text style={styles.label}>City</Text>
-      <Picker
-        selectedValue={city}
-        onValueChange={(value) => dispatch(setCity(value))}
-        style={styles.picker}
-        enabled={!isSearching}
-      >
-        <Picker.Item label="Choose City" value="choose" />
-        <Picker.Item label="Riyadh" value="riyadh" />
-        <Picker.Item label="Jeddah" value="jeddah" />
-        <Picker.Item label="Khobar" value="khobar" />
-        <Picker.Item label="Dahran" value="dahran" />
-        <Picker.Item label="Dammam" value="dammam" />
-        <Picker.Item label="Madinah" value="madinah" />
-      </Picker>
+          <Text style={styles.label}>Time</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={time}
+              onValueChange={(value) => dispatch(setTime(value))}
+              style={styles.picker}
+              enabled={!isSearching}
+              dropdownIconColor="#FFFFFF"
+            >
+              <Picker.Item label="Choose Time" value="choose" />
+              <Picker.Item label="Morning" value="morning" />
+              <Picker.Item label="Afternoon" value="afternoon" />
+            </Picker>
+          </View>
 
-      <Text style={styles.label}>Time</Text>
-      <Picker
-        selectedValue={time}
-        onValueChange={(value) => dispatch(setTime(value))}
-        style={styles.picker}
-        enabled={!isSearching}
-      >
-        <Picker.Item label="Choose Time" value="choose" />
-        <Picker.Item label="Morning" value="morning" />
-        <Picker.Item label="Afternoon" value="afternoon" />
-      </Picker>
+          <Text style={styles.label}>Game Type</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={game}
+              onValueChange={(value) => dispatch(setGame(value))}
+              style={styles.picker}
+              enabled={!isSearching}
+              dropdownIconColor="#FFFFFF"
+            >
+              <Picker.Item label="Choose Game Type" value="choose" />
+              <Picker.Item label="Game 1" value="game1" />
+              <Picker.Item label="Game 2" value="game2" />
+            </Picker>
+          </View>
+        </ModernCard>
 
-      <Text style={styles.label}>Game Type</Text>
-      <Picker
-        selectedValue={game}
-        onValueChange={(value) => dispatch(setGame(value))}
-        style={styles.picker}
-        enabled={!isSearching}
-      >
-        <Picker.Item label="Choose Game Type" value="choose" />
-        <Picker.Item label="Game 1" value="game1" />
-        <Picker.Item label="Game 2" value="game2" />
-      </Picker>
-
-      {/* Loading state or search button */}
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#0000ff" />
-          <Text style={styles.loadingText}>Searching for a player...</Text>
-          <Text style={styles.loadingText}>
-            Search time: {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
-          </Text>
-          <Button title="Cancel" onPress={cancelSearch} />
-        </View>
-      ) : (
-        <View style={styles.buttonContainer}>
-          <Button title="Search" onPress={searchMatch} />
-        </View>
-      )}
-      
-      {/* Connection status indicator and reconnect button */}
-      {connectionStatus === 'reconnect_failed' && (
-        <TouchableOpacity
-          style={styles.reconnectButton}
-          onPress={() => {
-            // Attempt manual reconnection
-            if (manualReconnect()) {
-              Alert.alert('Reconnecting', 'Attempting to reconnect to the server...');
-            } else {
-              Alert.alert('Error', 'Could not reconnect. Please restart the app.');
-            }
-          }}
-        >
-          <Text style={styles.reconnectButtonText}>Reconnect</Text>
-        </TouchableOpacity>
-      )}
-      
-      {/* Session rules indicator */}
-      <View style={styles.sessionRulesIndicator}>
-        <Text style={styles.sessionRulesText}>
-          Session timeout: {getSessionTimeouts().inactivityTimeout}
-        </Text>
+        {/* Loading state or search button */}
+        {loading ? (
+          <ModernCard
+            variant="glass"
+            padding="large"
+            margin="small"
+            borderRadius="medium"
+            style={styles.searchingCard}
+          >
+            <ActivityIndicator size="large" color="#FFFFFF" />
+            <Text style={styles.searchingText}>Searching for a player...</Text>
+            <Text style={styles.searchingTimer}>
+              Search time: {Math.floor(countdown / 60)}:{(countdown % 60).toString().padStart(2, '0')}
+            </Text>
+            <ModernButton
+              title="Cancel Search"
+              variant="outline"
+              size="medium"
+              style={{ marginTop: 16 }}
+              onPress={cancelSearch}
+            />
+          </ModernCard>
+        ) : (
+          <ModernButton
+            title="Search for Match"
+            variant="primary"
+            size="large"
+            fullWidth
+            style={{ margin: 16 }}
+            onPress={searchMatch}
+          />
+        )}
+        
+        {/* Connection status indicator and reconnect button */}
+        {connectionStatus === 'reconnect_failed' && (
+          <ModernButton
+            title="Reconnect"
+            variant="danger"
+            size="medium"
+            style={styles.reconnectButton}
+            onPress={() => {
+              // Attempt manual reconnection
+              if (manualReconnect()) {
+                Alert.alert('Reconnecting', 'Attempting to reconnect to the server...');
+              } else {
+                Alert.alert('Error', 'Could not reconnect. Please restart the app.');
+              }
+            }}
+          />
+        )}
+        
+        {/* Debug button - always visible for testing */}
+        <ModernButton
+          title="Debug Console"
+          variant="ghost"
+          size="small"
+          style={styles.debugButton}
+          onPress={() => navigation.navigate('Debug')}
+        />
       </View>
-
-      {/* Debug button - always visible for testing */}
-      <TouchableOpacity
-        style={styles.debugButton}
-        onPress={() => navigation.navigate('Debug')}
-      >
-        <Text style={styles.debugButtonText}>Debug Console</Text>
-      </TouchableOpacity>
-      
-
-    </View>
+    </LinearGradient>
   );
 };
 
 /**
- * Styles for the HomeScreen component
+ * Modern styles for the HomeScreen component
  */
 const styles = StyleSheet.create({
+  gradientBackground: {
+    flex: 1,
+  },
   container: {
     flex: 1,
     padding: 16,
+  },
+  
+  // Header
+  headerCard: {
+    marginTop: 8,
   },
   headerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
   },
   userId: {
-    color: 'black',
+    color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '500',
   },
   connectionStatusContainer: {
     flexDirection: 'row',
@@ -1218,121 +1300,89 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    marginRight: 5,
+    marginRight: 8,
   },
   connectionStatusText: {
     fontSize: 14,
-    color: 'black',
+    color: '#FFFFFF',
+    opacity: 0.9,
   },
-  matchButton: {
-    padding: 10,
-    backgroundColor: 'blue',
-    marginBottom: 16,
+  
+  // Session info
+  sessionCard: {
     alignItems: 'center',
-    borderRadius: 5,
   },
-  matchButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
+  sessionRulesBannerText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    textAlign: 'center',
+    opacity: 0.9,
   },
-  testButton: {
-    padding: 10,
-    marginBottom: 16,
-    alignItems: 'center',
-    borderRadius: 5,
-  },
-  testButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  label: {
-    color: 'black',
-    fontSize: 18,
+  
+  // Match buttons
+  matchCard: {
     marginVertical: 8,
   },
+  
+  // Preferences
+  preferencesCard: {
+    marginVertical: 8,
+  },
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  label: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '500',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  pickerContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
   picker: {
-    color: 'black',
+    color: '#FFFFFF',
     height: 50,
-    width: '100%',
   },
-  loadingContainer: {
+  
+  // Searching state
+  searchingCard: {
     alignItems: 'center',
-    marginTop: 20,
+    marginVertical: 16,
   },
-  loadingText: {
-    color: 'black',
-    marginTop: 8,
-  },
-  buttonContainer: {
+  searchingText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '500',
     marginTop: 16,
+    textAlign: 'center',
+  },
+  searchingTimer: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginTop: 8,
+    opacity: 0.8,
+    textAlign: 'center',
+  },
+  
+  // Buttons
+  reconnectButton: {
+    position: 'absolute',
+    top: 80,
+    right: 20,
   },
   debugButton: {
     position: 'absolute',
     bottom: 20,
     right: 20,
-    backgroundColor: '#333',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-  },
-  debugButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 12,
-  },
-  sessionRulesIndicator: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    backgroundColor: '#f8f9fa',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-  },
-  sessionRulesText: {
-    color: '#495057',
-    fontSize: 12,
-  },
-  sessionRulesBanner: {
-    backgroundColor: '#f8f9fa',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-    marginBottom: 15,
-    alignItems: 'center',
-  },
-  sessionRulesBannerText: {
-    color: '#495057',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  reconnectButton: {
-    position: 'absolute',
-    top: 80,
-    right: 20,
-    backgroundColor: '#e74c3c',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 2,
-  },
-  reconnectButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 14,
   },
 });
 

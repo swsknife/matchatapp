@@ -1,18 +1,4 @@
 {
   "name": "MatchChatApp",
-  "displayName": "MatchChatApp",
-  "expo": {
-    "name": "MatchChatApp",
-    "slug": "match-chat-app",
-    "version": "1.0.0",
-    "assetBundlePatterns": [
-      "**/*"
-    ],
-    "android": {
-      "package": "com.matchchatapp"
-    },
-    "ios": {
-      "bundleIdentifier": "com.matchchatapp"
-    }
-  }
+  "displayName": "MatchChatApp"
 }

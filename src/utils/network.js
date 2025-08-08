@@ -1018,6 +1018,7 @@ const queueReadStatus = (messageId, matchId) => {
       console.log(
         `Read status queue at capacity, removed oldest item. Queue size: ${pendingReadStatuses.length}`,
       );
+    }
 
     // Add to queue with timestamp for debugging
     pendingReadStatuses.push({
@@ -1028,6 +1029,7 @@ const queueReadStatus = (messageId, matchId) => {
 
     console.log(
       `Queued read status for message ${messageId}. Queue size: ${pendingReadStatuses.length}`,
+    );
 
     // Set up a reconnect handler if not already set
     setupReadStatusReconnectHandler();

@@ -24,6 +24,11 @@ import { handleStorageError, handleNetworkError, ERROR_SEVERITY } from '../utils
 import { useFocusEffect } from '@react-navigation/native';
 import remoteLogger from '../utils/remoteLogger';
 import { updateActivity, resetInactivityTimer } from '../utils/sessionManager';
+import notificationService from '../services/notificationService';
+import ModernMessageBubble from '../components/modern/ModernMessageBubble';
+import ModernChatInput from '../components/modern/ModernChatInput';
+import ModernCard from '../components/modern/ModernCard';
+import { LinearGradient } from 'expo-linear-gradient';
 
 /**
  * ChatScreen Component
@@ -353,6 +358,16 @@ const ChatScreen = ({ route, navigation }) => {
             
             dispatch(addMessage(matchId, newMessage));
             remoteLogger.log('Added message from other user to chat', { messageId: newMessage.id });
+            
+            // Send push notification for new message (only if app is in background)
+            if (AppState.currentState !== 'active') {
+              notificationService.notifyNewMessage(
+                `User ${newMessage.sender.substring(0, 8)}...`,
+                newMessage.text,
+                matchId,
+                newMessage.id
+              );
+            }
             
             // If the message is from the other user and the chat screen is in focus, mark it as read
             // Check if app is in foreground and this screen is focused before marking as read
@@ -973,111 +988,27 @@ const ChatScreen = ({ route, navigation }) => {
   };
 
   /**
-   * Render a single message item
+   * Render a single message item using modern component
    * @param {Object} item - The message object to render
    */
   const renderMessage = ({ item }) => {
-    // Get status icon for WhatsApp-style message status indicators
-    const getStatusIcon = (status, offlineRecipient) => {
-      if (offlineRecipient) {
-        return '🕒'; // Clock icon for offline recipient (message queued)
-      }
-      
-      switch (status) {
-        case 'pending':
-          return '🕒'; // Clock icon for pending/unsent messages
-        case 'sent':
-          return '✓'; // Single checkmark for sent to server
-        case 'delivered':
-          return '✓✓'; // Double gray checkmarks for delivered to recipient
-        case 'read':
-          return '✓✓'; // Double blue checkmarks for read by recipient (color handled in style)
-        default:
-          return '✓';
-      }
-    };
-    
-    // Get color for message status indicator
-    const getStatusColor = (status) => {
-      switch (status) {
-        case 'pending':
-          return '#888888'; // Gray for pending
-        case 'sent':
-          return '#888888'; // Gray for sent
-        case 'delivered':
-          return '#888888'; // Gray for delivered
-        case 'read':
-          return '#4FC3F7'; // Light blue for read (WhatsApp style)
-        default:
-          return '#888888';
-      }
-    };
-    
-    // Get status text for accessibility and tooltip
-    const getStatusText = (status, offlineRecipient) => {
-      if (offlineRecipient) {
-        return 'Waiting to send (recipient offline)';
-      }
-      
-      switch (status) {
-        case 'pending':
-          return 'Sending...';
-        case 'sent':
-          return 'Sent to server';
-        case 'delivered':
-          return 'Delivered to recipient';
-        case 'read':
-          return 'Read by recipient';
-        default:
-          return '';
-      }
-    };
-
     return (
-      <View
-        style={[
-          styles.messageContainer,
-          item.sender === userId ? styles.myMessage : styles.otherMessage,
-        ]}
-      >
-        <Text
-          style={[
-            styles.messageText,
-            item.sender === userId ? styles.myMessageText : styles.otherMessageText,
-          ]}
-        >
-          {item.text || ''}
-        </Text>
-        <View style={styles.messageFooter}>
-          <Text style={styles.timestampText}>
-            {new Date(item.timestamp).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: true,
-            })}
-          </Text>
-          
-          {/* WhatsApp-style status indicators only shown for sent messages */}
-          {item.sender === userId && (
-            <View style={styles.statusContainer}>
-              <Text 
-                style={[
-                  styles.statusIcon, 
-                  { color: getStatusColor(item.status) }
-                ]}
-                accessibilityLabel={getStatusText(item.status, item.offlineRecipient)}
-              >
-                {getStatusIcon(item.status, item.offlineRecipient)}
-              </Text>
-            </View>
-          )}
-        </View>
-      </View>
+      <ModernMessageBubble
+        message={item}
+        isOwn={item.sender === userId}
+        showTimestamp={true}
+        showStatus={true}
+        animated={true}
+        onLongPress={(message) => {
+          // Handle long press for message actions (copy, delete, etc.)
+          console.log('Long pressed message:', message.id);
+        }}
+      />
     );
   };
 
   /**
-   * Main render method
+   * Main render method with modern UI
    * Handles three states:
    * 1. Loading - Shows spinner while connecting
    * 2. Match Ended - Shows inactive state with back button
@@ -1085,174 +1016,188 @@ const ChatScreen = ({ route, navigation }) => {
    */
   return (
     <ErrorBoundary>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 100}
+      <LinearGradient
+        colors={['#667eea', '#764ba2']}
+        style={styles.gradientBackground}
       >
-        <View style={styles.container}>
-          {isLoading ? (
-            <ActivityIndicator size="large" color="#0000ff" />
-          ) : !isMatchActive ? (
-            <View style={styles.inactiveContainer}>
-              <Text style={styles.inactiveText}>This match has ended</Text>
-              <TouchableOpacity 
-                style={styles.backButton}
-                onPress={() => navigation.goBack()}
-              >
-                <Text style={styles.backButtonText}>Back to Home</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <>
-              <Text style={styles.matchIdText}>Match ID: {matchId || ''}</Text>
-              <FlatList
-                ref={flatListRef}
-                data={messages}
-                renderItem={renderMessage}
-                keyExtractor={(item) => item.id.toString()}
-                onContentSizeChange={() => {
-                  if (flatListRef.current) {
-                    flatListRef.current.scrollToEnd({ animated: true });
-                  }
-                }}
-              />
-              <View style={styles.inputContainer}>
-                <TextInput
-                  style={[styles.input, !isMatchActive && styles.disabledInput]}
-                  placeholder="Type your message..."
-                  placeholderTextColor="black"
-                  onChangeText={setMessage}
-                  value={message}
-                  onSubmitEditing={handleSendMessage}
-                  blurOnSubmit={false}
-                  editable={isMatchActive}
-                />
-                <TouchableOpacity 
-                  style={[styles.sendButton, !isMatchActive && styles.disabledButton]} 
-                  onPress={handleSendMessage}
-                  disabled={!isMatchActive}
+        <KeyboardAvoidingView
+          style={styles.keyboardAvoidingView}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 100}
+        >
+          <View style={styles.container}>
+            {isLoading ? (
+              <View style={styles.loadingContainer}>
+                <ModernCard
+                  variant="glass"
+                  padding="large"
+                  borderRadius="large"
+                  style={styles.loadingCard}
                 >
-                  <Text style={styles.sendButtonText}>Send</Text>
-                </TouchableOpacity>
+                  <ActivityIndicator size="large" color="#FFFFFF" />
+                  <Text style={styles.loadingText}>Connecting to chat...</Text>
+                </ModernCard>
               </View>
-            </>
-          )}
-        </View>
-      </KeyboardAvoidingView>
+            ) : !isMatchActive ? (
+              <View style={styles.inactiveContainer}>
+                <ModernCard
+                  variant="glass"
+                  padding="large"
+                  borderRadius="large"
+                  style={styles.inactiveCard}
+                >
+                  <Text style={styles.inactiveText}>This match has ended</Text>
+                  <TouchableOpacity 
+                    style={styles.backButton}
+                    onPress={() => navigation.goBack()}
+                  >
+                    <LinearGradient
+                      colors={['#FFFFFF', '#F8F9FA']}
+                      style={styles.backButtonGradient}
+                    >
+                      <Text style={styles.backButtonText}>Back to Home</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </ModernCard>
+              </View>
+            ) : (
+              <>
+                <ModernCard
+                  variant="glass"
+                  padding="small"
+                  margin="small"
+                  borderRadius="medium"
+                  style={styles.headerCard}
+                >
+                  <Text style={styles.matchIdText}>Match ID: {matchId || ''}</Text>
+                </ModernCard>
+                
+                <View style={styles.messagesContainer}>
+                  <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    renderItem={renderMessage}
+                    keyExtractor={(item) => item.id.toString()}
+                    showsVerticalScrollIndicator={false}
+                    contentContainerStyle={styles.messagesList}
+                    onContentSizeChange={() => {
+                      if (flatListRef.current) {
+                        flatListRef.current.scrollToEnd({ animated: true });
+                      }
+                    }}
+                  />
+                </View>
+                
+                <ModernChatInput
+                  value={message}
+                  onChangeText={setMessage}
+                  onSend={(text) => {
+                    setMessage('');
+                    handleSendMessage();
+                  }}
+                  placeholder="Type your message..."
+                  disabled={!isMatchActive}
+                  maxLength={1000}
+                  showCharacterCount={false}
+                  style={styles.chatInput}
+                />
+              </>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </LinearGradient>
     </ErrorBoundary>
   );
 };
 
 /**
- * Styles for the ChatScreen component
+ * Modern styles for the ChatScreen component
  */
 const styles = StyleSheet.create({
+  gradientBackground: {
+    flex: 1,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   container: {
     flex: 1,
-    backgroundColor: '#fff',
   },
-  matchIdText: {
-    textAlign: 'center',
-    marginVertical: 10,
-  },
-  messageContainer: {
-    margin: 10,
-    padding: 10,
-    borderRadius: 10,
-    maxWidth: '80%',
-  },
-  myMessage: {
-    backgroundColor: '#DCF8C6', // Light green for user's messages
-    alignSelf: 'flex-end',
-  },
-  otherMessage: {
-    backgroundColor: '#ECECEC', // Light gray for other's messages
-    alignSelf: 'flex-start',
-  },
-  messageText: {
-    fontSize: 16,
-  },
-  myMessageText: {
-    color: '#000',
-  },
-  otherMessageText: {
-    color: '#000',
-  },
-  messageFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 5,
-  },
-  timestampText: {
-    fontSize: 12,
-    color: '#999',
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusText: {
-    fontSize: 10,
-    color: '#666',
-    marginLeft: 5,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: '#EEE',
-  },
-  input: {
+  
+  // Loading state
+  loadingContainer: {
     flex: 1,
-    backgroundColor: '#FFF',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    fontSize: 16,
-    color: '#000',
-  },
-  disabledInput: {
-    backgroundColor: '#F0F0F0',
-    color: '#999',
-  },
-  sendButton: {
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 15,
+    paddingHorizontal: 32,
   },
-  sendButtonText: {
-    color: '#007AFF',
+  loadingCard: {
+    alignItems: 'center',
+    minWidth: 200,
+  },
+  loadingText: {
+    color: '#FFFFFF',
     fontSize: 16,
+    marginTop: 16,
+    textAlign: 'center',
   },
-  statusIcon: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginLeft: 4,
-  },
+  
+  // Inactive state
   inactiveContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f0f0f0',
+    paddingHorizontal: 32,
+  },
+  inactiveCard: {
+    alignItems: 'center',
+    minWidth: 250,
   },
   inactiveText: {
     fontSize: 18,
-    color: '#666',
-    marginBottom: 20,
+    color: '#FFFFFF',
+    marginBottom: 24,
+    textAlign: 'center',
   },
   backButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 5,
+    borderRadius: 12,
+    overflow: 'hidden',
+    minWidth: 120,
+  },
+  backButtonGradient: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
   backButtonText: {
-    color: 'white',
+    color: '#667eea',
     fontSize: 16,
+    fontWeight: '600',
   },
-  disabledButton: {
-    opacity: 0.5,
+  
+  // Header
+  headerCard: {
+    marginTop: 8,
+  },
+  matchIdText: {
+    textAlign: 'center',
+    color: '#FFFFFF',
+    fontSize: 14,
+    opacity: 0.9,
+  },
+  
+  // Messages
+  messagesContainer: {
+    flex: 1,
+    paddingTop: 8,
+  },
+  messagesList: {
+    paddingBottom: 16,
+  },
+  
+  // Chat input
+  chatInput: {
+    marginBottom: Platform.OS === 'ios' ? 34 : 16,
   },
 });
 
